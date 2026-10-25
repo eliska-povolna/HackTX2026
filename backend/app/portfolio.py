@@ -273,6 +273,7 @@ async def explain_portfolio(task, agent, ctx, run_id, costs, request):
     minimized = [
         {
             "customer_id": c["customer_id"],
+            "name": c["name"],
             "score": c["score"],
             "reasons": c["reasons"],
             "financial_summary": c["financial_summary"],
@@ -316,7 +317,7 @@ async def explain_portfolio(task, agent, ctx, run_id, costs, request):
         system = build_agent_system_prompt(
             agent,
             ctx["team_policy"],
-            task_instruction="Explain the supplied deterministic demo ranking. Do not change scores, invent eligibility decisions, or claim to approve loans or send offers. For mobility explain the supplied next actions. Distinguish fixture banking from live Nessie. Use a short paragraph; only supplied derived facts.",
+            task_instruction="Explain the supplied deterministic demo ranking. Do not change scores, invent eligibility decisions, or claim to approve loans or send offers. For mobility explain the supplied next actions. Distinguish fixture banking from live Nessie. Use two or three short sentences under 90 words. Use customer display names, never internal IDs or field names. Mention at most the top two priorities and why; do not reproduce the financial table. Only supplied derived facts.",
         )
         data = await llm._post_chat_completion(
             headers={

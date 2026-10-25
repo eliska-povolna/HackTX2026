@@ -181,6 +181,7 @@ def test_actual_shortlist_model_payload_is_minimized(client, monkeypatch):
     payload = json.loads(post.call_args.kwargs["payload"]["messages"][1]["content"])
     assert set(payload) == {"purpose", "ranked_summaries"}
     assert len(payload["ranked_summaries"]) == 7
+    assert all(row["name"] for row in payload["ranked_summaries"])
     serialized = json.dumps(payload)
     for forbidden in [
         "purchases",
