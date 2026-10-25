@@ -73,7 +73,7 @@ def build_team_for_job(analysis: JobAnalysis, goal: str) -> TeamDefinition:
                     "calculate_emergency_runway",
                 ],
                 permissions=AgentPermissions(
-                    data_scopes=["nessie_raw_financial", "financial_summary", "toyota_customer_profile"],
+                    data_scopes=["nessie_raw_financial", "financial_summary", "toyota_customer_profile", "vehicle_data", "lease_data", "usage_data"],
                     actions=["read", "calculate"],
                 ),
                 guardrails=["Do not expose raw transactions to downstream agents."],
@@ -93,7 +93,7 @@ def build_team_for_job(analysis: JobAnalysis, goal: str) -> TeamDefinition:
                 ),
                 allowed_tools=["rank_customers", "explain_shortlist", "run_evaluators"],
                 permissions=AgentPermissions(
-                    data_scopes=["financial_summary", "toyota_customer_profile", "vehicle_data"],
+                    data_scopes=["financial_summary", "toyota_customer_profile", "vehicle_data", "lease_data", "usage_data"],
                     actions=["read", "synthesize", "recommend", "calculate"],
                 ),
                 guardrails=["Never access nessie_raw_financial."],
@@ -169,7 +169,7 @@ def build_team_for_job(analysis: JobAnalysis, goal: str) -> TeamDefinition:
                     "explain_shortlist",
                 ],
                 permissions=AgentPermissions(
-                    data_scopes=["financial_summary", "vehicle_data", "lease_data", "usage_data"],
+                    data_scopes=["financial_summary", "toyota_customer_profile", "vehicle_data", "lease_data", "usage_data"],
                     actions=["read", "synthesize", "recommend", "calculate"],
                 ),
                 guardrails=["No raw Nessie access."],

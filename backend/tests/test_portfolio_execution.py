@@ -146,7 +146,11 @@ def test_portfolio_plan_and_run_use_arbitrary_agent_ids(client, monkeypatch):
     assert planned.status_code == 200, planned.text
     assert planned.json()["team"]["policy"]["workflow_kind"] == "loan_opportunity"
     assert len(planned.json()["team"]["agents"]) == 2
-    finance = next(a for a in planned.json()["team"]["agents"] if "build_portfolio_financials" in a["allowed_tools"])
+    finance = next(
+        a
+        for a in planned.json()["team"]["agents"]
+        if "build_portfolio_financials" in a["allowed_tools"]
+    )
     assert "filter_mobility_portfolio" not in finance["allowed_tools"]
     assert "full Toyota demo portfolio" in finance["purpose"]
     assert planned.json()["job_analysis"]["scope"] == "portfolio"
@@ -257,8 +261,86 @@ def test_portfolio_evaluator_rejects_bad_scores_and_raw_fields():
 
 def test_equal_loan_scores_are_ordered_by_financial_headroom_not_input_order():
     from app.tools.deterministic import rank_customers
-    def row(identity,budget):
-        return {"customer_id":identity,"name":identity,"financial":{"affordability_score":100,"loan_candidate_fit":True,"safe_mobility_budget":budget,"emergency_runway_months":4,"monthly_free_cashflow":2000}}
-    lower,higher=row("first-in-input",500),row("second-in-input",900)
-    assert rank_customers([lower,higher])["top_ids"][0]=="second-in-input"
-    assert rank_customers([higher,lower])["top_ids"][0]=="second-in-input"
+
+    def row(identity, budget):
+        return {
+            "customer_id": identity,
+            "name": identity,
+            "financial": {
+                "affordability_score": 100,
+                "loan_candidate_fit": True,
+                "safe_mobility_budget": budget,
+                "emergency_runway_months": 4,
+                "monthly_free_cashflow": 2000,
+            },
+        }
+
+    lower, higher = row("first-in-input", 500), row("second-in-input", 900)
+    assert rank_customers([lower, higher])["top_ids"][0] == "second-in-input"
+    assert rank_customers([higher, lower])["top_ids"][0] == "second-in-input"
+
+
+def test_running_draft_does_not_save_or_overwrite_saved_team(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.db_models import Base
+    import app.db as db
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(db, "_SessionLocal", sessionmaker(bind=engine))
+    monkeypatch.setattr(db, "db_available", True)
+    monkeypatch.setattr("app.main.init_db", lambda: True)
+    monkeypatch.setenv("META_API_KEY", "")
+    import app.services.llm_service as service
+
+    service._llm_service = None
+    team = build_team_for_job(analyze_job(LOAN), LOAN)
+    with TestClient(app) as client:
+        assert run(client, LOAN, team)["status"] == "COMPLETED"
+        assert not any(
+            t["id"] == team.id for t in client.get("/api/teams").json()["teams"]
+        )
+        assert client.get("/api/teams/" + team.id).status_code == 404
+        saved = client.post(
+            "/api/teams", json={"goal": LOAN, "team": team.model_dump()}
+        )
+        assert saved.status_code == 201
+        original = client.get("/api/teams/" + team.id).json()["team"]
+        assert original["policy"] == team.policy.model_dump()
+        team.team_name = "Unsaved runtime edit"
+        team.policy.max_llm_calls = 0
+        assert run(client, LOAN, team)["status"] == "BUDGET_LIMIT"
+        restored = client.get("/api/teams/" + team.id).json()["team"]
+        assert restored == original
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "scope", ["toyota_customer_profile", "vehicle_data", "lease_data", "usage_data"]
+)
+def test_removed_toyota_scope_denies_portfolio_loading(client, scope):
+    team = build_team_for_job(analyze_job(LOAN), LOAN)
+    finance = next(a for a in team.agents if "load_toyota_portfolio" in a.allowed_tools)
+    finance.permissions.data_scopes.remove(scope)
+    response = client.post(
+        "/api/runs", json={"goal": LOAN, "team": team.model_dump(), "context": {}}
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+    assert scope in response.json()["error"]["message"]
+
+
+def test_ranker_cannot_access_vehicle_data_without_scope(client):
+    team = build_team_for_job(analyze_job(LOAN), LOAN)
+    decision = next(a for a in team.agents if "rank_customers" in a.allowed_tools)
+    decision.permissions.data_scopes.remove("vehicle_data")
+    response = client.post(
+        "/api/runs", json={"goal": LOAN, "team": team.model_dump(), "context": {}}
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+    assert "vehicle_data" in response.json()["error"]["message"]
