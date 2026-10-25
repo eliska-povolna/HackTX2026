@@ -90,8 +90,13 @@ def _task(
 def build_toyota_execution_plan(
     team: TeamDefinition,
     context_source_ids: Optional[list[str]] = None,
+    *,
+    include_downstream: Optional[bool] = None,
 ) -> ExecutionPlan:
-    """Build the Toyota plan; executors come only from ExecutionRouter.route()."""
+    """Build the Toyota plan; executors come only from ExecutionRouter.route().
+
+    include_downstream=False keeps only load + relevance (no-action customers).
+    """
     enabled = resolve_enabled_ids(context_source_ids)
     if not toyota_enabled(enabled):
         raise ValueError(
@@ -132,7 +137,7 @@ def build_toyota_execution_plan(
         ),
     ]
 
-    include_full = nessie_enabled(enabled)
+    include_full = nessie_enabled(enabled) and include_downstream is not False
     if include_full:
         tasks.extend(
             [
@@ -320,11 +325,25 @@ def _skip_remaining_tasks(run_id: str, pending: dict[str, RunTaskState], reason:
     pending.clear()
 
 
+def mobility_relevant(customer_id: str) -> bool:
+    """Cheap CODE preflight — same gate the executor uses after load."""
+    from app.tools.deterministic import evaluate_mobility_relevance
+    from app.tools.toyota import load_toyota_customer
+
+    toyota = load_toyota_customer(customer_id)
+    return bool(evaluate_mobility_relevance(toyota).get("relevant"))
+
+
 async def execute_run(run_id: str, request: CreateRunRequest) -> None:
     """Background execution for one run."""
     request.team = ensure_team_runtime_config(request.team)
     source_ids = _merged_context_source_ids(request)
-    plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None)
+    relevant = mobility_relevant(request.context.customer_id)
+    plan = build_toyota_execution_plan(
+        request.team,
+        context_source_ids=source_ids or None,
+        include_downstream=relevant,
+    )
     agents = _agents_by_id(request.team)
     policy = _team_policy(request.team)
     work_style = normalize_work_style(policy.work_style)

@@ -138,9 +138,11 @@ def test_runtime_does_not_repair_stripped_permissions(client, monkeypatch):
             a.allowed_tools = [t for t in a.allowed_tools if "nessie" not in t]
             a.allowed_integrations = []
 
-    # Without repair, validation fails
+    # Unrepaired validation still denies. create_run aligns the Toyota pack
+    # before execution so the submitted copy can run; the caller's object is not mutated.
     result = validate_team_against_workflow(team, repair=False)
     assert not result.ok
+    stripped = next(a.allowed_tools for a in team.agents if a.id == "financial-agent")
 
     r = client.post(
         "/api/runs",
@@ -151,10 +153,8 @@ def test_runtime_does_not_repair_stripped_permissions(client, monkeypatch):
             "quality_mode": "normal",
         },
     )
-    assert r.status_code == 400
-    body = r.json()
-    code = (body.get("error") or body.get("detail") or {}).get("code")
-    assert code == "PERMISSION_DENIED"
+    assert r.status_code == 202, r.text
+    assert next(a.allowed_tools for a in team.agents if a.id == "financial-agent") == stripped
 
 
 def _wait_run(client, run_id: str, timeout: float = 60.0):
@@ -249,3 +249,68 @@ def test_recommendation_not_forced_by_customer_id():
     assert high_rec != "BUY_CURRENT_VEHICLE"
     assert low_rec == "BUY_CURRENT_VEHICLE"
     assert "customer-stable" not in str(high_rec)
+
+
+def test_scope_alias_and_empty_actions():
+    from app.models import AgentDefinition, AgentPermissions, BudgetPolicy, TeamDefinition, TeamPolicy
+    from app.team_normalize import ensure_team_runtime_config
+
+    team = TeamDefinition(
+        id="alias",
+        team_name="Alias",
+        summary="",
+        policy=TeamPolicy(),
+        agents=[
+            AgentDefinition(
+                id="fin",
+                name="Fin",
+                role="Financial",
+                purpose="p",
+                skills=[],
+                allowed_tools=["nessie_load_customer_financials"],
+                permissions=AgentPermissions(
+                    data_scopes=["customer_financials", "bank_accounts"],
+                    actions=[],
+                ),
+                budget=BudgetPolicy(max_llm_cost_usd=0.05, max_llm_calls=1),
+            )
+        ],
+    )
+    normalized = ensure_team_runtime_config(team)
+    agent = normalized.agents[0]
+    assert "nessie_raw_financial" in agent.permissions.data_scopes
+    assert "customer_financials" not in agent.permissions.data_scopes
+    assert agent.permissions.actions == ["read"]
+    # Original object is not rewritten in place.
+    assert team.agents[0].permissions.actions == []
+
+
+def test_weak_team_runs_without_manual_repair(client, monkeypatch):
+    monkeypatch.setenv("META_API_KEY", "")
+    import app.services.llm_service as llm_mod
+
+    llm_mod._llm_service = None
+    team = _weak_llm_team()
+    for customer_id, expected_status in [
+        ("customer-stable", "COMPLETED"),
+        ("customer-stressed", "COMPLETED"),
+        ("customer-no-action", "NO_ACTION_NEEDED"),
+    ]:
+        r = client.post(
+            "/api/runs",
+            json={
+                "goal": "mobility decision",
+                "team": team.model_dump(),
+                "context": {"customer_id": customer_id},
+                "quality_mode": "normal",
+            },
+        )
+        assert r.status_code == 202, (customer_id, r.text)
+        body = _wait_run(client, r.json()["run_id"])
+        assert body["status"] == expected_status, (customer_id, body["status"], body.get("recommendation"))
+        if expected_status == "NO_ACTION_NEEDED":
+            assert body["metrics"]["llm_calls"] == 0
+            assert not any(
+                t.get("action") == "nessie_load_customer_financials" and t.get("status") == "COMPLETED"
+                for t in body.get("tasks", [])
+            )

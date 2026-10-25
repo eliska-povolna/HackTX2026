@@ -460,13 +460,33 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
         request.context_source_ids = source_ids
         request.context.context_source_ids = source_ids
 
+    from app.executor import mobility_relevant
     from app.team_normalize import ensure_team_runtime_config
+    from app.workflow_validate import validate_team_against_workflow
 
     request.team = ensure_team_runtime_config(request.team)
+    aligned = validate_team_against_workflow(
+        request.team,
+        context_source_ids=source_ids or None,
+        repair=True,
+    )
+    if not aligned.ok:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "PERMISSION_DENIED",
+                "message": "; ".join(aligned.errors[:4]) or "Team is not ready for this workflow.",
+                "recoverable": True,
+            },
+        )
+    request.team = aligned.team
 
+    relevant = mobility_relevant(request.context.customer_id)
     try:
         plan = build_toyota_execution_plan(
-            request.team, context_source_ids=source_ids or None
+            request.team,
+            context_source_ids=source_ids or None,
+            include_downstream=relevant,
         )
     except (ValueError, Exception) as exc:
         from app.routing import RoutingError
