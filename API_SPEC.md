@@ -74,7 +74,10 @@ COMPLETED
 FAILED
 BUDGET_LIMIT
 APPROVAL_REQUIRED
+NO_ACTION_NEEDED
 ```
+
+`NO_ACTION_NEEDED` means the deterministic relevance check decided a full mobility decision should not run (no Nessie / no LLM for that invocation).
 
 ## TaskStatus
 
@@ -725,12 +728,54 @@ Do not include raw Nessie data here.
 
 ---
 
+# 8b. Context sources and mobility trigger
+
+## GET `/api/context-sources`
+
+Non-secret catalog of built-in sources (`toyota_customer`, `nessie_banking`) plus uploaded files. Used so the UI can show dismissible context chips. No API-key vault.
+
+## POST `/api/triggers/mobility/evaluate`
+
+Trigger-ready relevance check for the reusable Toyota Mobility Decision Team. Not continuous monitoring — an external scheduler/CRM/lease event would call this.
+
+Request:
+
+```json
+{
+  "customer_id": "customer-stable",
+  "start_run_if_relevant": false,
+  "team_id": null
+}
+```
+
+Response:
+
+```json
+{
+  "customer_id": "customer-stable",
+  "relevant": true,
+  "reasons": [
+    "Lease is within the decision window",
+    "Driving pattern changed materially"
+  ],
+  "run_id": null
+}
+```
+
+When `start_run_if_relevant` is true and the customer is relevant, the server starts the existing `/api/runs` engine (same team definition) and returns `run_id`.
+
+---
+
 # 9. Run creation
 
 ## POST `/api/runs`
 
 Purpose:
 Start one end-to-end team execution.
+
+Optional `context_source_ids` (top-level and/or under `context`) selects which built-in sources are enabled. Empty = defaults (Toyota + Nessie).
+
+Executors for each task are chosen by a deterministic ExecutionRouter (`ROUTE_DECISION` audit events). Order: CODE → TOOL → LLM.
 
 Request:
 
@@ -744,7 +789,8 @@ Request:
     "agents": []
   },
   "context": {
-    "customer_id": "customer-stable"
+    "customer_id": "customer-stable",
+    "context_source_ids": ["toyota_customer", "nessie_banking"]
   },
   "quality_mode": "normal"
 }

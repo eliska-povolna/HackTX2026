@@ -20,11 +20,14 @@ from app.attachments import (
     save_upload,
 )
 from app.db import init_db
+from app.context_sources import catalog as context_sources_catalog
 from app.executor import build_toyota_execution_plan, execute_run
 from app.models import (
     AttachmentListResponse,
     AttachmentMeta,
     AuditEventsResponse,
+    ContextSourceItem,
+    ContextSourcesResponse,
     CreateRunRequest,
     CreateRunResponse,
     DemoCustomerDetail,
@@ -37,8 +40,12 @@ from app.models import (
     HealthResponse,
     IntegrationStatusItem,
     IntegrationsResponse,
+    MobilityTriggerRequest,
+    MobilityTriggerResponse,
     PlanTeamRequest,
     PlanTeamResponse,
+    QualityMode,
+    RunContext,
     RunStatus,
     RunStatusResponse,
     RunsListResponse,
@@ -49,7 +56,7 @@ from app.models import (
     Template,
     TemplatesResponse,
 )
-from app.planner import plan_team as plan_team_orchestrator
+from app.planner import build_fallback_team, plan_team as plan_team_orchestrator
 from app.run_store import (
     create_run_record,
     get_run,
@@ -59,8 +66,9 @@ from app.run_store import (
 )
 from app.services.llm_service import get_llm_service
 from app.team_store import delete_saved_team, get_saved_team, list_saved_teams, save_team
+from app.tools.deterministic import evaluate_mobility_relevance
 from app.tools.nessie import get_nessie_client
-from app.tools.toyota import load_toyota_customers
+from app.tools.toyota import load_toyota_customer, load_toyota_customers
 
 # Repo-root .env (HackTX2026/.env), not backend/.env
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -323,6 +331,85 @@ async def remove_attachment(attachment_id: str) -> None:
     return None
 
 
+@app.get("/api/context-sources", response_model=ContextSourcesResponse)
+async def list_context_sources() -> ContextSourcesResponse:
+    """Built-in + uploaded file context sources (no secrets)."""
+    return ContextSourcesResponse(
+        sources=[ContextSourceItem.model_validate(s) for s in context_sources_catalog()]
+    )
+
+
+@app.post("/api/triggers/mobility/evaluate", response_model=MobilityTriggerResponse)
+async def mobility_trigger_evaluate(
+    request: MobilityTriggerRequest,
+    background: BackgroundTasks,
+) -> MobilityTriggerResponse:
+    """
+    Trigger-ready relevance check for the reusable Toyota Mobility Decision Team.
+
+    Intended integration point for a future scheduled scan, CRM event, or lease-maturity
+    webhook. This prototype does NOT run a continuous monitor or cron worker.
+    """
+    try:
+        toyota = load_toyota_customer(request.customer_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOT_FOUND",
+                "message": f"Customer '{request.customer_id}' not found.",
+                "recoverable": True,
+            },
+        ) from exc
+
+    relevance = evaluate_mobility_relevance(toyota)
+    run_id: str | None = None
+
+    if request.start_run_if_relevant and relevance.get("relevant"):
+        team = None
+        if request.team_id:
+            found = get_saved_team(request.team_id)
+            if found is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "code": "NOT_FOUND",
+                        "message": f"Team '{request.team_id}' not found.",
+                        "recoverable": True,
+                    },
+                )
+            team = found[1]
+        else:
+            team = build_fallback_team(
+                "Triggered mobility decision evaluation",
+                max_team_size=5,
+            )
+
+        run_req = CreateRunRequest(
+            goal="Triggered mobility decision evaluation",
+            team=team,
+            context=RunContext(customer_id=request.customer_id),
+            quality_mode=QualityMode.normal,
+        )
+        try:
+            plan = build_toyota_execution_plan(run_req.team)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "INVALID_REQUEST", "message": str(exc), "recoverable": True},
+            ) from exc
+        run = create_run_record(run_req, plan)
+        background.add_task(execute_run, run.run_id, run_req)
+        run_id = run.run_id
+
+    return MobilityTriggerResponse(
+        customer_id=request.customer_id,
+        relevant=bool(relevance.get("relevant")),
+        reasons=list(relevance.get("reasons") or []),
+        run_id=run_id,
+    )
+
+
 @app.post("/api/runs", response_model=CreateRunResponse, status_code=202)
 async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> CreateRunResponse:
     # Validate customer exists
@@ -364,7 +451,33 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
         request.context.attachment_ids = att_ids
         request.attachment_ids = att_ids
 
-    plan = build_toyota_execution_plan(request.team)
+    source_ids = list(
+        dict.fromkeys(
+            [*(request.context_source_ids or []), *(request.context.context_source_ids or [])]
+        )
+    )
+    if source_ids:
+        request.context_source_ids = source_ids
+        request.context.context_source_ids = source_ids
+
+    try:
+        plan = build_toyota_execution_plan(
+            request.team, context_source_ids=source_ids or None
+        )
+    except (ValueError, Exception) as exc:
+        from app.routing import RoutingError
+
+        if isinstance(exc, (ValueError, RoutingError)):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "INVALID_REQUEST",
+                    "message": str(exc),
+                    "recoverable": True,
+                },
+            ) from exc
+        raise
+
     run = create_run_record(request, plan)
     background.add_task(execute_run, run.run_id, request)
     return CreateRunResponse(run_id=run.run_id, status=RunStatus.PLANNING)

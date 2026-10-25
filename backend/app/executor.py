@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
+from app.context_sources import (
+    nessie_enabled,
+    resolve_enabled_ids,
+    toyota_enabled,
+)
 from app.cost_optimizer import RunCostTracker
 from app.evaluators import recommendation_contains_raw_nessie, run_evaluators
 from app.models import (
@@ -36,9 +41,14 @@ from app.permissions import (
     check_tool_allowed,
     decision_agent_blocked_from_raw_nessie,
 )
+from app.routing import RouteDecision, RoutingError, route
 from app.run_store import append_audit, append_output, get_run, record_task_event, update_run
 from app.services.llm_service import LLMUnavailableError, get_llm_service
-from app.tools.deterministic import build_fallback_recommendation, score_mobility_options
+from app.tools.deterministic import (
+    build_fallback_recommendation,
+    evaluate_mobility_relevance,
+    score_mobility_options,
+)
 from app.tools.financial import build_financial_context
 from app.tools.nessie import get_nessie_client
 from app.tools.toyota import load_toyota_customer
@@ -46,71 +56,120 @@ from app.tools.toyota import load_toyota_customer
 logger = logging.getLogger(__name__)
 
 
-def build_toyota_execution_plan(team: TeamDefinition) -> ExecutionPlan:
+def _task(
+    *,
+    task_id: str,
+    name: str,
+    agent_id: str,
+    action: str,
+    agents: dict[str, AgentDefinition],
+    depends_on: list[str],
+    risk_level: RiskLevel,
+) -> TaskDefinition:
+    agent = agents.get(agent_id)
+    decision = route(action, agent)
+    return TaskDefinition(
+        id=task_id,
+        name=name,
+        assigned_agent_id=agent_id,
+        executor=decision.executor,
+        action=action,
+        depends_on=depends_on,
+        risk_level=risk_level,
+    )
+
+
+def build_toyota_execution_plan(
+    team: TeamDefinition,
+    context_source_ids: Optional[list[str]] = None,
+) -> ExecutionPlan:
+    """Build the Toyota plan; executors come only from ExecutionRouter.route()."""
+    enabled = resolve_enabled_ids(context_source_ids)
+    if not toyota_enabled(enabled):
+        raise ValueError(
+            "Context source 'toyota_customer' is required for the Mobility Decision Team."
+        )
+
     agents = {a.id: a for a in team.agents}
     context_id = _pick_agent(agents, ["context-agent"], "context")
     financial_id = _pick_agent(agents, ["financial-agent"], "financial")
     vehicle_id = _pick_agent(agents, ["vehicle-agent"], "vehicle")
     decision_id = _pick_agent(agents, ["decision-agent"], "decision")
 
-    return ExecutionPlan(
-        tasks=[
-            TaskDefinition(
-                id="load-toyota-context",
-                name="Load Toyota customer context",
-                assigned_agent_id=context_id,
-                executor=ExecutorType.TOOL,
-                action="load_toyota_customer",
-                depends_on=[],
-                risk_level=RiskLevel.low,
-            ),
-            TaskDefinition(
-                id="load-nessie-financials",
-                name="Load banking data",
-                assigned_agent_id=financial_id,
-                executor=ExecutorType.TOOL,
-                action="nessie_load_customer_financials",
-                depends_on=["load-toyota-context"],
-                risk_level=RiskLevel.medium,
-            ),
-            TaskDefinition(
-                id="build-financial-context",
-                name="Build financial context",
-                assigned_agent_id=financial_id,
-                executor=ExecutorType.CODE,
-                action="build_financial_context",
-                depends_on=["load-nessie-financials"],
-                risk_level=RiskLevel.medium,
-            ),
-            TaskDefinition(
-                id="score-mobility-options",
-                name="Compare ownership options",
-                assigned_agent_id=vehicle_id,
-                executor=ExecutorType.CODE,
-                action="score_mobility_options",
-                depends_on=["build-financial-context", "load-toyota-context"],
-                risk_level=RiskLevel.medium,
-            ),
-            TaskDefinition(
-                id="synthesize-recommendation",
-                name="Synthesize mobility recommendation",
-                assigned_agent_id=decision_id,
-                executor=ExecutorType.LLM,
-                action="synthesize_recommendation",
-                depends_on=["score-mobility-options", "build-financial-context"],
-                risk_level=RiskLevel.medium,
-            ),
-            TaskDefinition(
-                id="run-evaluators",
-                name="Run deterministic evaluators",
-                assigned_agent_id=decision_id,
-                executor=ExecutorType.CODE,
-                action="run_evaluators",
-                depends_on=["synthesize-recommendation"],
-                risk_level=RiskLevel.low,
-            ),
-        ]
-    )
+    tasks: list[TaskDefinition] = [
+        _task(
+            task_id="load-toyota-context",
+            name="Load Toyota customer context",
+            agent_id=context_id,
+            action="load_toyota_customer",
+            agents=agents,
+            depends_on=[],
+            risk_level=RiskLevel.low,
+        ),
+        _task(
+            task_id="evaluate-mobility-relevance",
+            name="Evaluate mobility relevance",
+            agent_id=context_id,
+            action="evaluate_mobility_relevance",
+            agents=agents,
+            depends_on=["load-toyota-context"],
+            risk_level=RiskLevel.low,
+        ),
+    ]
+
+    include_full = nessie_enabled(enabled)
+    if include_full:
+        tasks.extend(
+            [
+                _task(
+                    task_id="load-nessie-financials",
+                    name="Load banking data",
+                    agent_id=financial_id,
+                    action="nessie_load_customer_financials",
+                    agents=agents,
+                    depends_on=["evaluate-mobility-relevance"],
+                    risk_level=RiskLevel.medium,
+                ),
+                _task(
+                    task_id="build-financial-context",
+                    name="Build financial context",
+                    agent_id=financial_id,
+                    action="build_financial_context",
+                    agents=agents,
+                    depends_on=["load-nessie-financials"],
+                    risk_level=RiskLevel.medium,
+                ),
+                _task(
+                    task_id="score-mobility-options",
+                    name="Compare ownership options",
+                    agent_id=vehicle_id,
+                    action="score_mobility_options",
+                    agents=agents,
+                    depends_on=["build-financial-context", "load-toyota-context"],
+                    risk_level=RiskLevel.medium,
+                ),
+                _task(
+                    task_id="synthesize-recommendation",
+                    name="Synthesize mobility recommendation",
+                    agent_id=decision_id,
+                    action="synthesize_recommendation",
+                    agents=agents,
+                    depends_on=["score-mobility-options", "build-financial-context"],
+                    risk_level=RiskLevel.medium,
+                ),
+                _task(
+                    task_id="run-evaluators",
+                    name="Run deterministic evaluators",
+                    agent_id=decision_id,
+                    action="run_evaluators",
+                    agents=agents,
+                    depends_on=["synthesize-recommendation"],
+                    risk_level=RiskLevel.low,
+                ),
+            ]
+        )
+
+    return ExecutionPlan(tasks=tasks)
 
 
 def _pick_agent(agents: dict[str, AgentDefinition], preferred: list[str], hint: str) -> str:
@@ -161,6 +220,9 @@ def _ensure_plan_tools(team: TeamDefinition, plan: ExecutionPlan) -> dict[str, A
         needed = task.action
         if needed not in agent.allowed_tools:
             agent.allowed_tools = list(agent.allowed_tools) + [needed]
+        if task.action == "evaluate_mobility_relevance":
+            if "evaluate_mobility_relevance" not in agent.allowed_tools:
+                agent.allowed_tools = list(agent.allowed_tools) + ["evaluate_mobility_relevance"]
         if task.action == "nessie_load_customer_financials":
             for t in ("nessie_accounts", "nessie_purchases"):
                 if t not in agent.allowed_tools:
@@ -173,9 +235,77 @@ def _ensure_plan_tools(team: TeamDefinition, plan: ExecutionPlan) -> dict[str, A
     return agents
 
 
+def _merged_context_source_ids(request: CreateRunRequest) -> list[str]:
+    return list(
+        dict.fromkeys(
+            [
+                *(request.context_source_ids or []),
+                *(request.context.context_source_ids or []),
+            ]
+        )
+    )
+
+
+def _emit_route_decisions(
+    run_id: str,
+    plan: ExecutionPlan,
+    agents: dict[str, AgentDefinition],
+    costs: RunCostTracker,
+) -> None:
+    for task in plan.tasks:
+        agent = agents.get(task.assigned_agent_id)
+        try:
+            decision: RouteDecision = route(task.action, agent)
+        except RoutingError as exc:
+            _audit(
+                run_id,
+                agent_id=task.assigned_agent_id,
+                event_type="ROUTE_DECISION",
+                resource=task.action,
+                result="FAILED",
+                message=str(exc),
+            )
+            raise
+        costs.record_route()
+        _audit(
+            run_id,
+            agent_id=task.assigned_agent_id,
+            event_type="ROUTE_DECISION",
+            executor_type=decision.executor,
+            resource=task.action,
+            result=decision.executor.value,
+            message=f"{task.action} → {decision.executor.value}. Reason: {decision.reason}",
+        )
+
+
+def _skip_remaining_tasks(run_id: str, pending: dict[str, RunTaskState], reason: str) -> None:
+    skipped_ids = list(pending.keys())
+
+    def _mut(r) -> None:
+        for t in r.tasks:
+            if t.id in skipped_ids:
+                t.status = TaskStatus.SKIPPED
+                t.activity_summary = reason
+
+    update_run(run_id, _mut)
+    for tid in skipped_ids:
+        task = pending[tid]
+        _audit(
+            run_id,
+            agent_id=task.assigned_agent_id,
+            event_type="TASK_COMPLETED",
+            executor_type=task.executor,
+            resource=task.action,
+            result="SKIPPED",
+            message=reason,
+        )
+    pending.clear()
+
+
 async def execute_run(run_id: str, request: CreateRunRequest) -> None:
     """Background execution for one run."""
-    plan = build_toyota_execution_plan(request.team)
+    source_ids = _merged_context_source_ids(request)
+    plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None)
     agents = _ensure_plan_tools(request.team, plan)
     costs = RunCostTracker()
     ctx: dict[str, Any] = {
@@ -185,6 +315,8 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
         "financial": None,
         "scored": None,
         "recommendation": None,
+        "relevance": None,
+        "no_action_needed": False,
         "permission_allows": 0,
         "permission_denials": 0,
         "tool_failures": 0,
@@ -195,6 +327,7 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
 
     update_run(run_id, lambda r: setattr(r, "status", RunStatus.RUNNING))
     _audit(run_id, agent_id=None, event_type="RUN_CREATED", message="Run execution started.")
+    _emit_route_decisions(run_id, plan, agents, costs)
 
     # Security demo: decision agent denied raw Nessie
     decision = next((a for a in request.team.agents if "decision" in a.id), None)
@@ -238,8 +371,43 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
                 )
                 completed.add(task_id)
                 del pending[task_id]
-            if not progress:
+
+                if task.action == "evaluate_mobility_relevance" and ctx.get("no_action_needed"):
+                    skip_reason = (
+                        "No mobility decision needed — skipped expensive Nessie/LLM work."
+                    )
+                    # Count remaining TOOL/LLM tasks as avoided LLM baseline work.
+                    for skipped in list(pending.values()):
+                        if skipped.executor in (ExecutorType.TOOL, ExecutorType.LLM):
+                            costs.record_avoided_optional_llm()
+                        elif skipped.executor == ExecutorType.CODE:
+                            costs.record_avoided_optional_llm()
+                    _skip_remaining_tasks(run_id, pending, skip_reason)
+                    break
+            if not progress and pending:
                 raise RuntimeError("Task dependency deadlock")
+
+        if ctx.get("no_action_needed"):
+            def _finalize_noop(r) -> None:
+                r.status = RunStatus.NO_ACTION_NEEDED
+                r.financial_context = ctx["financial"]
+                r.recommendation = None
+                r.metrics = type(r.metrics).model_validate(costs.metrics_dict())
+                r.evaluators = []
+
+            update_run(run_id, _finalize_noop)
+            reasons = (ctx.get("relevance") or {}).get("reasons") or []
+            _audit(
+                run_id,
+                agent_id=None,
+                event_type="RUN_COMPLETED",
+                result="NO_ACTION_NEEDED",
+                message=(
+                    "No relevant mobility decision — run stopped before Nessie/LLM. "
+                    + "; ".join(reasons)
+                ),
+            )
+            return
 
         update_run(
             run_id,
@@ -249,16 +417,19 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
             ),
         )
 
-        # Skip reviewer unless strict / high risk
+        # Skip reviewer unless strict / high risk (optional LLM task)
         if not costs.should_run_reviewer(request.quality_mode.value, False):
             _audit(
                 run_id,
                 agent_id="reviewer-agent",
                 event_type="TASK_COMPLETED",
-                message="Reviewer skipped — normal risk. Estimated AI cost saved.",
+                message=(
+                    "Reviewer skipped — Reason: normal-risk run; "
+                    "additional LLM review not required"
+                ),
                 result="SKIPPED",
             )
-            costs.llm_calls_avoided += 1
+            costs.record_avoided_optional_llm()
 
         def _finalize(r) -> None:
             r.status = RunStatus.COMPLETED if ctx["budget_ok"] else RunStatus.BUDGET_LIMIT
@@ -502,6 +673,49 @@ async def _run_code(
     costs: RunCostTracker,
 ) -> str:
     costs.record_code()
+    if task.action == "evaluate_mobility_relevance":
+        toyota = ctx.get("toyota")
+        if not toyota:
+            raise RuntimeError("Toyota customer missing for relevance check")
+        relevance = evaluate_mobility_relevance(toyota)
+        ctx["relevance"] = relevance
+        ctx["no_action_needed"] = not bool(relevance.get("relevant"))
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="RELEVANCE_CHECK",
+            executor_type=ExecutorType.CODE,
+            resource="evaluate_mobility_relevance",
+            result="RELEVANT" if relevance.get("relevant") else "NOT_RELEVANT",
+            message=(
+                f"relevant={relevance.get('relevant')}; "
+                + "; ".join(relevance.get("reasons") or [])
+            ),
+        )
+        append_output(
+            run_id,
+            OutputItem(
+                id=f"out-{uuid4().hex[:8]}",
+                title="Mobility Relevance",
+                agent_id=agent.id,
+                type="RELEVANCE",
+                summary=(
+                    "Relevant — continuing full decision"
+                    if relevance.get("relevant")
+                    else "Not relevant — no action needed"
+                ),
+                content=json.dumps(relevance),
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                cost_usd=0.0,
+                source_type="CODE",
+            ),
+        )
+        return (
+            "Mobility decision is relevant."
+            if relevance.get("relevant")
+            else "No mobility decision needed right now."
+        )
+
     if task.action == "build_financial_context":
         raw = ctx.get("nessie_raw")
         if not raw:
@@ -596,7 +810,7 @@ async def _run_llm(
     )
 
     estimated_cost = 0.0045
-    if not costs.can_afford_llm(estimated_cost):
+    if not costs.can_afford_llm(estimated_cost, agent=agent):
         _audit(
             run_id,
             agent_id=agent.id,
@@ -604,7 +818,11 @@ async def _run_llm(
             executor_type=ExecutorType.LLM,
             resource="synthesize_recommendation",
             result="DENIED",
-            message="LLM synthesis blocked by run budget.",
+            message=(
+                "LLM synthesis blocked by run budget and/or assigned agent budget "
+                f"(agent max_llm_calls={agent.budget.max_llm_calls}, "
+                f"max_llm_cost_usd={agent.budget.max_llm_cost_usd})."
+            ),
             cost_usd=0.0,
         )
         raise RuntimeError("BUDGET_LIMIT: cannot afford LLM synthesis")
@@ -620,7 +838,7 @@ async def _run_llm(
             recommendation = await _llm_synthesize(financial, seed, request.goal)
             used_real_llm = True
             cost = estimated_cost
-            costs.record_llm(cost_usd=cost)
+            costs.record_llm(cost_usd=cost, agent_id=agent.id)
         except (LLMUnavailableError, Exception) as exc:
             _audit(
                 run_id,

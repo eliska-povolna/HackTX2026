@@ -83,7 +83,7 @@ def _wait_run(client, run_id: str, timeout: float = 60.0):
         r = client.get(f"/api/runs/{run_id}")
         assert r.status_code == 200
         body = r.json()
-        if body["status"] in {"COMPLETED", "FAILED", "BUDGET_LIMIT"}:
+        if body["status"] in {"COMPLETED", "FAILED", "BUDGET_LIMIT", "NO_ACTION_NEEDED"}:
             return body
         time.sleep(0.2)
     raise AssertionError("Run did not finish in time")

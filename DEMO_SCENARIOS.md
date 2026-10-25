@@ -14,11 +14,21 @@ All data is synthetic / sandbox data.
 
 The main demo should prove:
 
-> **Same vehicle context does not imply the same recommendation. Financial reality matters.**
+> **Same team. Same Toyota. Different financial reality. Different recommendation.**
+
+And:
+
+> **Agents define responsibility. QuestMaster chooses CODE / TOOL / LLM via a deterministic router.**
+
+Sarah and Jordan both run through the **same** Toyota Mobility Decision Team. Only customer/financial context changes.
+
+The team is **trigger-ready** (API / event / future scheduled scan) — not a continuous background monitor.
+
+Near the start of each run, CODE `evaluate_mobility_relevance` may stop the run as `NO_ACTION_NEEDED` before Nessie or LLM work when no decision window exists.
 
 The customer should not need to explain their life manually in chat.
 
-The system should proactively combine:
+The system should combine:
 - Toyota customer data,
 - vehicle data,
 - contract data,
@@ -429,11 +439,13 @@ Before demo, verify:
 - [ ] permission denial can be shown,
 - [ ] no secrets appear.
 
-### Cost
+### Cost / routing
+- [ ] `ROUTE_DECISION` audit events explain CODE / TOOL / LLM,
 - [ ] CODE task visible,
 - [ ] TOOL task visible,
 - [ ] LLM task visible,
-- [ ] avoided-call/savings metric visible.
+- [ ] avoided-call metric uses documented full-LLM baseline,
+- [ ] irrelevant trigger path shows `NO_ACTION_NEEDED` with 0 LLM calls.
 
 ### Reliability
 - [ ] each main scenario succeeds three consecutive times.

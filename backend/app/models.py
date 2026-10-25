@@ -25,6 +25,7 @@ class RunStatus(str, Enum):
     FAILED = "FAILED"
     BUDGET_LIMIT = "BUDGET_LIMIT"
     APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    NO_ACTION_NEEDED = "NO_ACTION_NEEDED"
 
 
 class TaskStatus(str, Enum):
@@ -224,6 +225,7 @@ class PlanTeamRequest(BaseModel):
     max_team_size: int = 5
     budget_preference: str = "balanced"
     attachment_ids: list[str] = Field(default_factory=list)
+    context_source_ids: list[str] = Field(default_factory=list)
 
 
 class PlanTeamResponse(BaseModel):
@@ -331,6 +333,7 @@ class ErrorResponse(BaseModel):
 class RunContext(BaseModel):
     customer_id: str
     attachment_ids: list[str] = Field(default_factory=list)
+    context_source_ids: list[str] = Field(default_factory=list)
 
 
 class CreateRunRequest(BaseModel):
@@ -339,6 +342,7 @@ class CreateRunRequest(BaseModel):
     context: RunContext
     quality_mode: QualityMode = QualityMode.normal
     attachment_ids: list[str] = Field(default_factory=list)
+    context_source_ids: list[str] = Field(default_factory=list)
 
 
 class CreateRunResponse(BaseModel):
@@ -417,6 +421,37 @@ class RunMetrics(BaseModel):
     code_tasks: int = 0
     tool_tasks: int = 0
     llm_tasks: int = 0
+    routing_decisions: int = 0
+    agent_llm_calls: dict[str, int] = Field(default_factory=dict)
+    agent_llm_cost: dict[str, float] = Field(default_factory=dict)
+
+
+class ContextSourceItem(BaseModel):
+    id: str
+    type: str
+    label: str
+    status: str
+    dismissible: bool = True
+    description: str = ""
+    executor_hint: Optional[str] = None
+    attachment_id: Optional[str] = None
+
+
+class ContextSourcesResponse(BaseModel):
+    sources: list[ContextSourceItem]
+
+
+class MobilityTriggerRequest(BaseModel):
+    customer_id: str
+    start_run_if_relevant: bool = False
+    team_id: Optional[str] = None
+
+
+class MobilityTriggerResponse(BaseModel):
+    customer_id: str
+    relevant: bool
+    reasons: list[str]
+    run_id: Optional[str] = None
 
 
 class OutputItem(BaseModel):

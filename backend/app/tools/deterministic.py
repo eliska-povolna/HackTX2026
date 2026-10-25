@@ -11,6 +11,49 @@ from app.models import (
     ToyotaRecommendation,
 )
 
+# Lease / contract decision window (months). Demo customers use months_remaining=2.
+_LEASE_DECISION_WINDOW_MONTHS = 6
+# Material usage swing (absolute percent). Demo customers use ~-38%.
+_USAGE_CHANGE_THRESHOLD = 20.0
+
+
+def evaluate_mobility_relevance(toyota: dict[str, Any]) -> dict[str, Any]:
+    """
+    Deterministic CODE gate: whether a full mobility decision should run now.
+
+    Uses only signals already present on the Toyota customer fixture
+    (contract.months_remaining, usage.change_percent). No new data sources.
+    """
+    contract = toyota.get("contract") or {}
+    usage = toyota.get("usage") or {}
+    months = int(contract.get("months_remaining") if contract.get("months_remaining") is not None else 99)
+    change = float(usage.get("change_percent") or 0.0)
+
+    reasons: list[str] = []
+    if months <= _LEASE_DECISION_WINDOW_MONTHS:
+        reasons.append("Lease is within the decision window")
+    if abs(change) >= _USAGE_CHANGE_THRESHOLD:
+        reasons.append("Driving pattern changed materially")
+
+    # Explicit override for tests / synthetic non-relevant fixtures
+    if toyota.get("force_not_relevant") is True:
+        return {
+            "relevant": False,
+            "reasons": ["No mobility decision signal in the current customer window"],
+            "months_remaining": months,
+            "usage_change_percent": change,
+        }
+
+    relevant = len(reasons) > 0
+    if not relevant:
+        reasons = ["No mobility decision signal in the current customer window"]
+    return {
+        "relevant": relevant,
+        "reasons": reasons,
+        "months_remaining": months,
+        "usage_change_percent": change,
+    }
+
 
 def score_mobility_options(
     toyota: dict[str, Any],

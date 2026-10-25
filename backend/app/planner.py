@@ -24,10 +24,12 @@ AVAILABLE_TOOLS = [
     "nessie_purchases",
     "build_financial_context",
     "load_toyota_customer",
+    "evaluate_mobility_relevance",
     "calculate_affordability",
     "calculate_emergency_runway",
     "score_mobility_options",
     "synthesize_recommendation",
+    "run_evaluators",
 ]
 
 
@@ -41,7 +43,7 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
             purpose="Identify relevant customer and vehicle signals and decide which information is needed.",
             skills=["customer_context", "signal_detection", "data_scoping"],
             instructions="Use only Toyota profile, vehicle, lease, and usage data. Never request raw Nessie transactions.",
-            allowed_tools=["load_toyota_customer"],
+            allowed_tools=["load_toyota_customer", "evaluate_mobility_relevance"],
             permissions=AgentPermissions(
                 data_scopes=[
                     "toyota_customer_profile",

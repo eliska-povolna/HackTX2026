@@ -196,6 +196,8 @@ def _summary_from_memory(run: RunStatusResponse, team_name: str) -> RunListItem:
     result = None
     if run.recommendation and run.recommendation.recommended_action:
         result = run.recommendation.recommended_action
+    elif run.status == RunStatus.NO_ACTION_NEEDED:
+        result = "NO_ACTION_NEEDED"
     return RunListItem(
         run_id=run.run_id,
         goal=run.goal,
@@ -604,6 +606,7 @@ def _persist_update(run: RunStatusResponse) -> None:
                 RunStatus.COMPLETED,
                 RunStatus.FAILED,
                 RunStatus.BUDGET_LIMIT,
+                RunStatus.NO_ACTION_NEEDED,
             }:
                 row.completed_at = datetime.now(timezone.utc)
     except Exception as exc:
