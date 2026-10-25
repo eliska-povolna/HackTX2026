@@ -1,0 +1,44 @@
+name: Deploy backend
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Deploy to Vultr over SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VULTR_SSH_KEY }}
+          VULTR_HOST: ${{ secrets.VULTR_HOST }}
+          VULTR_USER: ${{ secrets.VULTR_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VULTR_HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+            "$VULTR_USER@$VULTR_HOST" 'bash -s' <<'EOF'
+          set -euo pipefail
+          cd /opt/questmaster/HackTX2026
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          if [ ! -x backend/.venv/bin/pip ]; then
+            echo "Existing virtualenv not found at backend/.venv" >&2
+            exit 1
+          fi
+          backend/.venv/bin/pip install -r backend/requirements.txt
+          sudo systemctl restart questmaster-backend
+          curl -f http://127.0.0.1:8000/api/health
+          EOF

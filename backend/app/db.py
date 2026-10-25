@@ -42,12 +42,23 @@ def init_db() -> bool:
         url = "postgresql+psycopg://" + url[len("postgres://") :]
     elif url.startswith("postgresql://") and "+psycopg" not in url:
         url = "postgresql+psycopg://" + url[len("postgresql://") :]
+    if "connect_timeout=" not in url:
+        url += ("&" if "?" in url else "?") + "connect_timeout=8"
 
     try:
-        _engine = create_engine(url, pool_pre_ping=True, pool_size=3, max_overflow=2)
+        # Short connect timeout so an unreachable Tiger URL cannot hang app startup.
+        _engine = create_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=3,
+            max_overflow=2,
+            connect_args={"connect_timeout": 8},
+        )
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
         from app.db_models import Base
 
+        with _engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
         Base.metadata.create_all(_engine)
         _maybe_create_hypertable(_engine)
         db_available = True

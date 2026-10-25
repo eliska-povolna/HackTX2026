@@ -3,6 +3,13 @@
 .env.*
 !.env_template
 
+# Local deploy SSH keys (never commit)
+questmaster_deploy
+questmaster_deploy.pub
+*_deploy
+*_deploy.pub
+*.pem
+
 # Python
 __pycache__/
 *.py[cod]
