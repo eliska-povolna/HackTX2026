@@ -12,6 +12,7 @@ import app.db as db
 from app.db_models import AuditLogRow, OutputRow, RunRow, TaskEventRow, TeamRow
 from app.models import (
     AuditEvent,
+    AuditEventListItem,
     CreateRunRequest,
     ExecutionPlan,
     OutputItem,
@@ -100,21 +101,160 @@ def get_run(run_id: str) -> Optional[RunStatusResponse]:
 
 
 def list_runs() -> list[RunListItem]:
-    """In-memory run summaries for Reports (newest first)."""
+    """Merge in-memory + Tiger runs (memory wins on duplicate). Newest first."""
+    by_id: dict[str, RunListItem] = {}
+
+    # Persisted first, then overlay memory so live polls win.
+    for item in _list_runs_from_db():
+        by_id[item.run_id] = item
+
     with _lock:
-        ordered = sorted(_runs.values(), key=lambda r: r.created_at, reverse=True)
-        return [
-            RunListItem(
-                run_id=run.run_id,
-                goal=run.goal,
-                team_name=_run_team_names.get(run.run_id, "Team"),
-                status=run.status,
-                duration_ms=_duration_ms(run),
-                estimated_ai_cost_usd=run.metrics.estimated_ai_cost_usd,
-                llm_calls=run.metrics.llm_calls,
-            )
-            for run in ordered
+        memory_items = [
+            _summary_from_memory(run, _run_team_names.get(run.run_id, "Team"))
+            for run in _runs.values()
         ]
+    for item in memory_items:
+        by_id[item.run_id] = item
+
+    return sorted(by_id.values(), key=lambda r: r.date, reverse=True)
+
+
+def list_audit_events(*, limit: int = 200) -> list[AuditEventListItem]:
+    """Recent audit events from Tiger (and in-memory runs if DB unavailable)."""
+    limit = max(1, min(int(limit), 500))
+    if db.db_available:
+        try:
+            with db.session_scope() as session:
+                if session is not None:
+                    rows = (
+                        session.query(AuditLogRow)
+                        .order_by(AuditLogRow.timestamp.desc())
+                        .limit(limit)
+                        .all()
+                    )
+                    return [_audit_item_from_row(row) for row in rows]
+        except Exception as exc:
+            logger.warning("list_audit_events DB failed: %s", exc)
+
+    # Fallback: flatten in-memory audits only (dev/tests without Tiger).
+    events: list[AuditEventListItem] = []
+    with _lock:
+        for run in _runs.values():
+            for ev in run.audit_events:
+                events.append(
+                    AuditEventListItem(
+                        id=ev.id,
+                        timestamp=ev.timestamp,
+                        run_id=ev.run_id,
+                        agent_id=ev.agent_id,
+                        event_type=ev.event_type,
+                        executor_type=ev.executor_type.value if ev.executor_type else None,
+                        resource=ev.resource,
+                        result=ev.result,
+                        message=ev.message,
+                        cost_usd=ev.cost_usd,
+                    )
+                )
+    events.sort(key=lambda e: e.timestamp, reverse=True)
+    return events[:limit]
+
+
+def _summary_from_memory(run: RunStatusResponse, team_name: str) -> RunListItem:
+    result = None
+    if run.recommendation and run.recommendation.recommended_action:
+        result = run.recommendation.recommended_action
+    return RunListItem(
+        run_id=run.run_id,
+        goal=run.goal,
+        team_name=team_name,
+        status=run.status,
+        result=result,
+        date=run.created_at,
+        duration_ms=_duration_ms(run),
+        estimated_ai_cost_usd=run.metrics.estimated_ai_cost_usd,
+        llm_calls=run.metrics.llm_calls,
+        llm_calls_avoided=run.metrics.llm_calls_avoided,
+    )
+
+
+def _list_runs_from_db() -> list[RunListItem]:
+    if not db.db_available:
+        return []
+    try:
+        with db.session_scope() as session:
+            if session is None:
+                return []
+            rows = session.query(RunRow).order_by(RunRow.created_at.desc()).limit(200).all()
+            team_ids = {r.team_id for r in rows if r.team_id}
+            teams: dict[str, TeamRow] = {}
+            if team_ids:
+                for t in session.query(TeamRow).filter(TeamRow.id.in_(team_ids)).all():
+                    teams[t.id] = t
+            items: list[RunListItem] = []
+            for row in rows:
+                team_name = "Team"
+                if row.team_id and row.team_id in teams:
+                    team_name = teams[row.team_id].name or team_name
+                metrics = row.metrics_json or {}
+                rec = row.recommendation_json or {}
+                result = rec.get("recommended_action") if isinstance(rec, dict) else None
+                created = row.created_at
+                if created is not None and created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                date = (
+                    created.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if created
+                    else _utcnow()
+                )
+                duration_ms = None
+                if row.completed_at and row.created_at:
+                    duration_ms = max(
+                        0,
+                        int((row.completed_at - row.created_at).total_seconds() * 1000),
+                    )
+                try:
+                    status = RunStatus(row.status)
+                except ValueError:
+                    status = RunStatus.FAILED
+                items.append(
+                    RunListItem(
+                        run_id=row.id,
+                        goal=row.goal or "",
+                        team_name=team_name,
+                        status=status,
+                        result=result if result else None,
+                        date=date,
+                        duration_ms=duration_ms,
+                        estimated_ai_cost_usd=float(metrics.get("estimated_ai_cost_usd") or 0.0),
+                        llm_calls=int(metrics.get("llm_calls") or 0),
+                        llm_calls_avoided=int(metrics.get("llm_calls_avoided") or 0),
+                    )
+                )
+            return items
+    except Exception as exc:
+        logger.warning("list_runs from DB failed: %s", exc)
+        return []
+
+
+def _audit_item_from_row(row: AuditLogRow) -> AuditEventListItem:
+    ts = row.timestamp
+    if ts is not None and ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    timestamp = (
+        ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if ts else _utcnow()
+    )
+    return AuditEventListItem(
+        id=row.id,
+        timestamp=timestamp,
+        run_id=row.run_id,
+        agent_id=row.agent_id,
+        event_type=row.event_type,
+        executor_type=row.executor_type,
+        resource=row.resource,
+        result=row.result,
+        message=row.message or "",
+        cost_usd=float(row.cost_usd or 0.0),
+    )
 
 
 def _duration_ms(run: RunStatusResponse) -> Optional[int]:

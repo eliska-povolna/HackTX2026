@@ -34,9 +34,11 @@ def test_integrations_no_secrets(monkeypatch):
     body = r.json()
     ids = {i["id"]: i for i in body["integrations"]}
     assert ids["llm"]["label"] == "AI Model Provider"
+    assert ids["llm"]["status"] == "UNCONFIGURED"
     assert ids["nessie"]["label"] == "Capital One Nessie"
+    assert ids["nessie"]["status"] == "UNCONFIGURED"
     assert ids["vultr"]["status"] == "HOSTED"
-    assert ids["tiger"]["id"] == "tiger"
+    assert ids["tiger"]["status"] in {"CONNECTED", "UNCONFIGURED"}
 
     blob = str(body).lower()
     for secretish in ("api_key", "password", "postgresql://", "secret", "meta_api"):
@@ -66,6 +68,9 @@ def test_list_runs_from_memory():
         assert match["goal"]
         assert match["team_name"]
         assert "status" in match
+        assert "date" in match
+        assert "llm_calls_avoided" in match
+        assert "result" in match  # may be null while still planning
 
 
 def test_run_store_sees_db_available_after_init():

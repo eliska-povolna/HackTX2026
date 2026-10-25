@@ -1,5 +1,6 @@
 """Phase 1 regression + Phase 2 full run."""
 
+import os
 import time
 
 import pytest
@@ -34,7 +35,7 @@ def test_demo_customers(client):
     assert len(r.json()["customers"]) == 2
 
 
-def test_plan_team_fallback(client, monkeypatch):
+def test_plan_team_errors_when_llm_unavailable(client, monkeypatch):
     monkeypatch.setenv("META_API_KEY", "")
     # Reset LLM singleton
     import app.services.llm_service as llm_mod
@@ -44,11 +45,10 @@ def test_plan_team_fallback(client, monkeypatch):
         "/api/teams/plan",
         json={"goal": "Toyota next move", "max_team_size": 5, "budget_preference": "balanced"},
     )
-    assert r.status_code == 200
+    assert r.status_code == 503
     body = r.json()
-    assert body["fallback_used"] is True
-    assert body["planner_source"] == "FALLBACK"
-    assert len(body["team"]["agents"]) == 5
+    assert body["error"]["code"] == "LLM_UNAVAILABLE"
+    assert body["error"]["recoverable"] is True
 
 
 def test_database_init_without_url(monkeypatch):
@@ -112,12 +112,18 @@ def test_full_run_stable_vs_stressed(client, monkeypatch):
     assert "purchases" not in rec_text
     assert "merchant_id" not in rec_text
 
-    # Audit contains permission denial demo + tool/code/llm style events
+    # Audit contains permission denial demo + tool/code style events.
+    # In test mode without META key, synthesis uses CODE_FALLBACK (not fake LLM_CALL).
     events = {e["event_type"] for e in run_a["audit_events"]}
     assert "PERMISSION_CHECK" in events
     assert "TOOL_CALL" in events
     assert "DATA_MINIMIZATION" in events
+    assert "CODE_FALLBACK" in events or "LLM_CALL" in events
     assert any(e["result"] == "DENIED" for e in run_a["audit_events"])
+    # Without a real META key, successful LLM_CALL must not be faked.
+    if not (os.getenv("META_API_KEY") or "").strip():
+        assert "CODE_FALLBACK" in events
+        assert "LLM_CALL" not in events
 
     assert run_a["metrics"]["code_tasks"] >= 2
     assert run_a["metrics"]["tool_tasks"] >= 2

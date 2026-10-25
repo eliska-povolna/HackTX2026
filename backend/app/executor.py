@@ -462,8 +462,22 @@ async def _run_tool(
         return tool, DataSource.TOYOTA_SYNTHETIC.value, "Loaded Toyota customer context."
 
     if tool == "nessie_load_customer_financials":
-        nessie_id = (ctx.get("toyota") or {}).get("nessie_customer_id") or "nessie-demo-001"
-        payload, source = get_nessie_client().load_customer_financials(nessie_id)
+        nessie_id = (ctx.get("toyota") or {}).get("nessie_customer_id")
+        if not nessie_id:
+            raise RuntimeError("Toyota customer missing nessie_customer_id")
+        try:
+            payload, source = get_nessie_client().load_customer_financials(nessie_id)
+        except Exception as exc:
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="TOOL_CALL",
+                executor_type=ExecutorType.TOOL,
+                resource="nessie_accounts",
+                result="FAILED",
+                message=f"Nessie live load failed: {exc}",
+            )
+            raise
         ctx["nessie_raw"] = payload
         ctx["nessie_source"] = source
         _audit(
@@ -564,6 +578,8 @@ async def _run_llm(
     if task.action != "synthesize_recommendation":
         raise RuntimeError(f"Unsupported LLM action: {task.action}")
 
+    from app.runtime_mode import llm_deterministic_synthesis_allowed
+
     # Decision agent must only see FinancialContext + scored options — never raw Nessie
     financial: FinancialContext = ctx["financial"]
     scored = ctx["scored"]
@@ -579,48 +595,120 @@ async def _run_llm(
         message="Decision Agent receives FinancialContext only; raw Nessie excluded from prompt.",
     )
 
-    cost = 0.0045
-    if not costs.record_llm(cost_usd=cost):
-        # Still produce deterministic recommendation but mark budget
-        rec = build_fallback_recommendation(seed)
-        ctx["recommendation"] = rec
-        return "Budget limit — used deterministic recommendation seed.", 0.0, False
+    estimated_cost = 0.0045
+    if not costs.can_afford_llm(estimated_cost):
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="BUDGET_LIMIT",
+            executor_type=ExecutorType.LLM,
+            resource="synthesize_recommendation",
+            result="DENIED",
+            message="LLM synthesis blocked by run budget.",
+            cost_usd=0.0,
+        )
+        raise RuntimeError("BUDGET_LIMIT: cannot afford LLM synthesis")
 
+    llm = get_llm_service()
+    allow_deterministic = llm_deterministic_synthesis_allowed()
     recommendation: ToyotaRecommendation
-    try:
-        llm = get_llm_service()
-        if llm.is_configured():
-            recommendation = await _llm_synthesize(financial, seed, request.goal)
-        else:
-            recommendation = build_fallback_recommendation(seed)
-    except (LLMUnavailableError, Exception) as exc:
-        logger.info("LLM synthesize fallback: %s", exc)
-        recommendation = build_fallback_recommendation(seed)
+    used_real_llm = False
+    cost = 0.0
 
-    # Ensure deterministic scenario split even if LLM drifts
+    if llm.is_configured():
+        try:
+            recommendation = await _llm_synthesize(financial, seed, request.goal)
+            used_real_llm = True
+            cost = estimated_cost
+            costs.record_llm(cost_usd=cost)
+        except (LLMUnavailableError, Exception) as exc:
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="LLM_ERROR",
+                executor_type=ExecutorType.LLM,
+                resource="synthesize_recommendation",
+                result="FAILED",
+                message=f"LLM synthesis failed: {exc}",
+                cost_usd=0.0,
+            )
+            if not allow_deterministic:
+                raise RuntimeError(f"LLM synthesis failed: {exc}") from exc
+            recommendation = build_fallback_recommendation(seed)
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="CODE_FALLBACK",
+                executor_type=ExecutorType.CODE,
+                resource="synthesize_recommendation",
+                result="ALLOWED",
+                message="Dev/test mode: deterministic recommendation seed used after LLM failure.",
+                cost_usd=0.0,
+            )
+    else:
+        if not allow_deterministic:
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="LLM_ERROR",
+                executor_type=ExecutorType.LLM,
+                resource="synthesize_recommendation",
+                result="FAILED",
+                message="No LLM provider configured for synthesis.",
+                cost_usd=0.0,
+            )
+            raise RuntimeError("LLM provider not configured for recommendation synthesis")
+        recommendation = build_fallback_recommendation(seed)
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="CODE_FALLBACK",
+            executor_type=ExecutorType.CODE,
+            resource="synthesize_recommendation",
+            result="ALLOWED",
+            message="Dev/test mode: deterministic recommendation seed (LLM unconfigured).",
+            cost_usd=0.0,
+        )
+
+    # Safety: keep Toyota demo scenario split truthful if the model drifts.
+    safety_corrected = False
     if financial.financial_stress == "LOW" and recommendation.recommended_action not in {
         "BUY_CURRENT_VEHICLE"
     }:
         recommendation = build_fallback_recommendation(seed)
+        safety_corrected = True
     if financial.financial_stress == "HIGH" and recommendation.recommended_action in {
         "BUY_CURRENT_VEHICLE",
         "UPGRADE_VEHICLE",
     }:
         recommendation = build_fallback_recommendation(seed)
+        safety_corrected = True
+    if safety_corrected:
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="SAFETY_CORRECTION",
+            executor_type=ExecutorType.CODE,
+            resource="recommended_action",
+            result="CORRECTED",
+            message="Deterministic safety validator corrected recommended_action for financial stress.",
+            cost_usd=0.0,
+        )
 
     ctx["recommendation"] = recommendation
     assert not recommendation_contains_raw_nessie(recommendation.model_dump()) or not raw_blocked
 
-    _audit(
-        run_id,
-        agent_id=agent.id,
-        event_type="LLM_CALL",
-        executor_type=ExecutorType.LLM,
-        resource="synthesize_recommendation",
-        result="ALLOWED",
-        message="Generated customer-facing mobility recommendation.",
-        cost_usd=cost,
-    )
+    if used_real_llm:
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="LLM_CALL",
+            executor_type=ExecutorType.LLM,
+            resource="synthesize_recommendation",
+            result="ALLOWED",
+            message="Generated customer-facing mobility recommendation via live LLM.",
+            cost_usd=cost,
+        )
     append_output(
         run_id,
         OutputItem(
@@ -632,7 +720,7 @@ async def _run_llm(
             content=recommendation.headline + "\n\n" + "\n".join(recommendation.reasons),
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             cost_usd=cost,
-            source_type="LLM",
+            source_type="LLM" if used_real_llm else "CODE",
         ),
     )
 
@@ -640,7 +728,12 @@ async def _run_llm(
         r.recommendation = recommendation
 
     update_run(run_id, _set_rec)
-    return "Generated customer-friendly explanation.", cost, True
+    summary = (
+        "Generated customer-friendly explanation via LLM."
+        if used_real_llm
+        else "Generated deterministic recommendation (dev/test path)."
+    )
+    return summary, cost, True
 
 
 async def _llm_synthesize(
@@ -650,10 +743,14 @@ async def _llm_synthesize(
 ) -> ToyotaRecommendation:
     """Ask LLM to polish the deterministic recommendation — never send raw Nessie."""
     llm = get_llm_service()
+    if not llm.is_configured():
+        raise LLMUnavailableError("No LLM provider configured")
     system = (
         "You polish a Toyota mobility recommendation. Return ONLY JSON matching keys: "
         "recommended_action, confidence, headline, summary, reasons, assumptions, "
-        "next_step {label, action_type}, options. Do not invent raw bank transactions."
+        "next_step {label, action_type}, options. Do not invent raw bank transactions. "
+        "Keep recommended_action aligned with the seed unless the financial context clearly "
+        "requires a different safe mobility choice."
     )
     user = json.dumps(
         {
@@ -662,27 +759,27 @@ async def _llm_synthesize(
             "seed_recommendation": seed,
         }
     )
-    # Reuse provider transport via a tiny private call if available
-    if hasattr(llm, "_post_chat_completion"):
-        headers = {
-            "Authorization": f"Bearer {llm.meta_api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": llm._model_for_planning(),
-            "messages": [
-                {"role": "developer", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0.2,
-        }
-        data = await llm._post_chat_completion(headers=headers, payload=payload)
-        content = data["choices"][0]["message"]["content"]
-        from app.services.llm_service import _extract_json_object
+    headers = {
+        "Authorization": f"Bearer {llm.meta_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": llm._model_for_planning(),
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.2,
+    }
+    data = await llm._post_chat_completion(headers=headers, payload=payload)
+    content = data["choices"][0]["message"]["content"]
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part) for part in content
+        )
+    from app.services.llm_service import _extract_json_object
 
-        parsed = _extract_json_object(content)
-        # Keep scored options from seed if model omits them
-        if not parsed.get("options"):
-            parsed["options"] = seed.get("options", [])
-        return ToyotaRecommendation.model_validate(parsed)
-    return build_fallback_recommendation(seed)
+    parsed = _extract_json_object(str(content))
+    if not parsed.get("options"):
+        parsed["options"] = seed.get("options", [])
+    return ToyotaRecommendation.model_validate(parsed)

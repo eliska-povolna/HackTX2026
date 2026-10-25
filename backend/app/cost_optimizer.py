@@ -36,11 +36,16 @@ class RunCostTracker:
         self.llm_calls_avoided += 1
         self.estimated_baseline_cost_usd += self.baseline_per_task_usd
 
-    def record_llm(self, cost_usd: float = 0.004, in_tok: int = 800, out_tok: int = 250) -> bool:
-        """Return False if budget would be exceeded."""
+    def can_afford_llm(self, cost_usd: float = 0.004) -> bool:
         if self.llm_calls + 1 > self.max_llm_calls:
             return False
         if self.estimated_ai_cost_usd + cost_usd > self.max_estimated_cost_usd:
+            return False
+        return True
+
+    def record_llm(self, cost_usd: float = 0.004, in_tok: int = 800, out_tok: int = 250) -> bool:
+        """Return False if budget would be exceeded."""
+        if not self.can_afford_llm(cost_usd):
             return False
         self.llm_calls += 1
         self.llm_tasks += 1

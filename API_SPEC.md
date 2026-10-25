@@ -528,6 +528,74 @@ Only Toyota needs to be fully functional.
 
 # 7. Team planning
 
+## POST `/api/attachments`
+
+Purpose:
+Upload a context file the planner/run can reference (demo documents, notes, CSV).
+
+Request: `multipart/form-data` with field `file`.
+
+Limits:
+- max 2 MiB per file
+- text types get a truncated excerpt for LLM context; binaries are stored without OCR
+
+Response `201`:
+
+```json
+{
+  "id": "att-a1b2c3d4e5f6",
+  "filename": "notes.txt",
+  "content_type": "text/plain",
+  "size_bytes": 420,
+  "created_at": "2026-10-25T12:00:00Z",
+  "has_text_excerpt": true
+}
+```
+
+Also:
+- `GET /api/attachments` — list metadata
+- `GET /api/attachments/{id}` — metadata
+- `DELETE /api/attachments/{id}` — remove
+
+Never return raw file bytes or secrets in these responses.
+
+Pass attachment ids into planning:
+
+`POST /api/teams/plan` may include `"attachment_ids": ["att-…"]`.
+
+`POST /api/runs` may include top-level `"attachment_ids"` and/or `context.attachment_ids`.
+
+---
+
+## Saved teams (Tiger)
+
+### `GET /api/teams`
+List persisted teams (newest updates first).
+
+### `POST /api/teams`
+Save or update a team definition in Tiger.
+
+Request:
+
+```json
+{
+  "goal": "Determine this customer's smartest next mobility decision.",
+  "team": { "id": "team-…", "team_name": "…", "summary": "…", "agents": [] }
+}
+```
+
+Response `201`: `{ "id", "name", "purpose", "member_ids", "estimated_cost_usd", "last_run_status" }`
+
+### `GET /api/teams/{team_id}`
+Full team + summary.
+
+### `DELETE /api/teams/{team_id}`
+Remove a saved team.
+
+Note: `POST /api/teams/plan` remains the LLM planner and is separate from persistence.
+
+---
+
 ## POST `/api/teams/plan`
 
 Purpose:
@@ -539,7 +607,8 @@ Request:
 {
   "goal": "Proactively determine the smartest next mobility decision for this Toyota customer.",
   "max_team_size": 5,
-  "budget_preference": "balanced"
+  "budget_preference": "balanced",
+  "attachment_ids": []
 }
 ```
 
@@ -588,12 +657,9 @@ Response `200`:
 ```
 
 If planner fails:
-- return `200`,
-- return fallback team,
-- `planner_source = "FALLBACK"`,
-- `fallback_used = true`.
-
-Do not return `500` merely because team planning failed.
+- return `503` with standard error `{ "error": { "code": "LLM_UNAVAILABLE", ... } }`,
+- do **not** silently substitute a deterministic Toyota fallback team.
+- Successful plans always use `planner_source = "LLM"` and `fallback_used = false`.
 
 ---
 
@@ -858,7 +924,7 @@ The second event is useful for security demonstration, but do not force a real f
 
 ## GET `/api/runs`
 
-Optional after core flow works.
+Returns in-memory runs merged with persisted Tiger/PostgreSQL runs (memory wins on `run_id` duplicates). Newest first.
 
 Response:
 
@@ -870,16 +936,51 @@ Response:
       "goal": "Determine this customer's smartest next mobility decision.",
       "team_name": "Toyota Mobility Decision Team",
       "status": "COMPLETED",
+      "result": "BUY_CURRENT_VEHICLE",
+      "date": "2026-10-25T12:00:00Z",
       "duration_ms": 8400,
       "estimated_ai_cost_usd": 0.008,
-      "llm_calls": 2
+      "llm_calls": 2,
+      "llm_calls_avoided": 14
     }
   ]
 }
 ```
 
-If persistence is not ready:
-- seed demo history client-side.
+Notes:
+- `result` is `recommended_action` when present; otherwise `null` (never invent).
+- `date` is the run `created_at` (ISO-8601 Zulu).
+
+---
+
+# 13b. Activity / audit history
+
+## GET `/api/audit-events?limit=200`
+
+Returns recent audit events across runs (Tiger `audit_logs` when DB is available). Newest first. `limit` is capped (max 500).
+
+Response:
+
+```json
+{
+  "events": [
+    {
+      "id": "aud-001",
+      "timestamp": "2026-10-25T12:00:01Z",
+      "run_id": "run-001",
+      "agent_id": "financial-agent",
+      "event_type": "TOOL_CALL",
+      "executor_type": "TOOL",
+      "resource": "nessie_accounts",
+      "result": "ALLOWED",
+      "message": "Retrieved financial data (NESSIE_LIVE).",
+      "cost_usd": 0
+    }
+  ]
+}
+```
+
+Never return API keys, passwords, DB URLs, or raw Nessie banking rows.
 
 ---
 
@@ -906,12 +1007,19 @@ Response:
       "id": "vultr",
       "label": "Vultr",
       "status": "HOSTED"
+    },
+    {
+      "id": "tiger",
+      "label": "Tiger Data",
+      "status": "CONNECTED"
     }
   ]
 }
 ```
 
-Never return secret values.
+Status vocabulary: `CONNECTED` | `HOSTED` | `UNCONFIGURED` | `ERROR`.
+
+Never return secret values. Do not report `CONNECTED` merely to look healthy when the integration is unconfigured.
 
 ---
 

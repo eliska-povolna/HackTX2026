@@ -211,12 +211,49 @@ class PlanTeamRequest(BaseModel):
     goal: str
     max_team_size: int = 5
     budget_preference: str = "balanced"
+    attachment_ids: list[str] = Field(default_factory=list)
 
 
 class PlanTeamResponse(BaseModel):
     team: TeamDefinition
     planner_source: PlannerSource
     fallback_used: bool
+
+
+class SaveTeamRequest(BaseModel):
+    team: TeamDefinition
+    goal: str = ""
+
+
+class SavedTeamSummary(BaseModel):
+    id: str
+    name: str
+    purpose: str
+    member_ids: list[str]
+    estimated_cost_usd: float = 0.0
+    last_run_status: str = "NEVER"
+
+
+class SavedTeamsResponse(BaseModel):
+    teams: list[SavedTeamSummary]
+
+
+class SavedTeamDetailResponse(BaseModel):
+    summary: SavedTeamSummary
+    team: TeamDefinition
+
+
+class AttachmentMeta(BaseModel):
+    id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: str
+    has_text_excerpt: bool
+
+
+class AttachmentListResponse(BaseModel):
+    attachments: list[AttachmentMeta]
 
 
 # --- Demo customers (API_SPEC §8) ---
@@ -281,6 +318,7 @@ class ErrorResponse(BaseModel):
 
 class RunContext(BaseModel):
     customer_id: str
+    attachment_ids: list[str] = Field(default_factory=list)
 
 
 class CreateRunRequest(BaseModel):
@@ -288,6 +326,7 @@ class CreateRunRequest(BaseModel):
     team: TeamDefinition
     context: RunContext
     quality_mode: QualityMode = QualityMode.normal
+    attachment_ids: list[str] = Field(default_factory=list)
 
 
 class CreateRunResponse(BaseModel):
@@ -300,9 +339,12 @@ class RunListItem(BaseModel):
     goal: str
     team_name: str
     status: RunStatus
+    result: Optional[str] = None
+    date: str
     duration_ms: Optional[int] = None
     estimated_ai_cost_usd: float = 0.0
     llm_calls: int = 0
+    llm_calls_avoided: int = 0
 
 
 class RunsListResponse(BaseModel):
@@ -317,6 +359,23 @@ class IntegrationStatusItem(BaseModel):
 
 class IntegrationsResponse(BaseModel):
     integrations: list[IntegrationStatusItem]
+
+
+class AuditEventListItem(BaseModel):
+    id: str
+    timestamp: str
+    run_id: str
+    agent_id: Optional[str] = None
+    event_type: str
+    executor_type: Optional[str] = None
+    resource: Optional[str] = None
+    result: Optional[str] = None
+    message: str
+    cost_usd: float = 0.0
+
+
+class AuditEventsResponse(BaseModel):
+    events: list[AuditEventListItem]
 
 
 class RunTaskState(BaseModel):

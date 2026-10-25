@@ -11,6 +11,7 @@ from typing import Any, Optional
 import httpx
 
 from app.models import DataSource
+from app.runtime_mode import nessie_fallback_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +40,8 @@ class NessieClient:
         self.base_url = (
             os.getenv("NESSIE_BASE_URL") or "https://api.nessieisreal.com"
         ).rstrip("/")
-        self.fallback_enabled = (
-            os.getenv("NESSIE_FALLBACK_ENABLED") or "true"
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        # Resolved at call time via nessie_fallback_enabled(); kept for scripts/logging.
+        self.fallback_enabled = nessie_fallback_enabled()
         self._fixture = self._load_json(FIXTURES_PATH)
         self._live_ids = self._load_live_ids()
         self._run_cache: dict[str, Any] = {}
@@ -129,7 +129,14 @@ class NessieClient:
         return customers["nessie-demo-001"]
 
     def load_customer_financials(self, nessie_customer_id: str) -> tuple[dict, DataSource]:
-        """Return aggregated banking payload + source. Never raises if fallback enabled."""
+        """Return aggregated banking payload + source.
+
+        Production/live: never silently substitute fixtures. Test/dev may use fixtures
+        when nessie_fallback_enabled() is true.
+        """
+        allow_fixtures = nessie_fallback_enabled()
+        self.fallback_enabled = allow_fixtures
+
         cache_key = f"financials:{nessie_customer_id}"
         cached = self._cache_get(cache_key)
         if cached is not None:
@@ -187,14 +194,17 @@ class NessieClient:
                 if account_list:
                     self._cache_set(cache_key, {"data": data})
                     return data, DataSource.NESSIE_LIVE
+                live_error = RuntimeError("Nessie returned no accounts for customer")
             except Exception as exc:
                 live_error = Exception(self._redact(str(exc)))
                 logger.warning(
                     "Nessie live failed for %s: %s", nessie_customer_id, live_error
                 )
+        else:
+            live_error = RuntimeError("NESSIE_API_KEY not configured")
 
-        if not self.fallback_enabled and live_error:
-            raise live_error
+        if not allow_fixtures:
+            raise live_error or RuntimeError("Nessie live unavailable")
 
         fixture = self._fixture_customer(nessie_customer_id)
         data = {

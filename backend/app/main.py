@@ -8,14 +8,23 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import app.db as db
+from app.attachments import (
+    delete_attachment,
+    get_attachment,
+    list_attachments,
+    save_upload,
+)
 from app.db import init_db
 from app.executor import build_toyota_execution_plan, execute_run
 from app.models import (
+    AttachmentListResponse,
+    AttachmentMeta,
+    AuditEventsResponse,
     CreateRunRequest,
     CreateRunResponse,
     DemoCustomerDetail,
@@ -31,12 +40,17 @@ from app.models import (
     RunStatus,
     RunStatusResponse,
     RunsListResponse,
+    SavedTeamDetailResponse,
+    SavedTeamSummary,
+    SavedTeamsResponse,
+    SaveTeamRequest,
     Template,
     TemplatesResponse,
 )
 from app.planner import plan_team as plan_team_orchestrator
-from app.run_store import create_run_record, get_run, list_runs
+from app.run_store import create_run_record, get_run, list_audit_events, list_runs
 from app.services.llm_service import get_llm_service
+from app.team_store import delete_saved_team, get_saved_team, list_saved_teams, save_team
 from app.tools.nessie import get_nessie_client
 from app.tools.toyota import load_toyota_customers
 
@@ -168,6 +182,125 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
     return await plan_team_orchestrator(request)
 
 
+@app.get("/api/teams", response_model=SavedTeamsResponse)
+async def list_teams() -> SavedTeamsResponse:
+    """List teams persisted in Tiger (or in-memory when DB is unavailable)."""
+    return SavedTeamsResponse(teams=list_saved_teams())
+
+
+@app.post("/api/teams", response_model=SavedTeamSummary, status_code=201)
+async def create_or_update_team(request: SaveTeamRequest) -> SavedTeamSummary:
+    if not request.team.agents:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": "Team must include at least one agent.",
+                "recoverable": True,
+            },
+        )
+    return save_team(request.team, goal=request.goal)
+
+
+@app.get("/api/teams/{team_id}", response_model=SavedTeamDetailResponse)
+async def get_team(team_id: str) -> SavedTeamDetailResponse:
+    found = get_saved_team(team_id)
+    if found is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOT_FOUND",
+                "message": f"Team '{team_id}' not found.",
+                "recoverable": True,
+            },
+        )
+    summary, team = found
+    return SavedTeamDetailResponse(summary=summary, team=team)
+
+
+@app.delete("/api/teams/{team_id}", status_code=204)
+async def remove_team(team_id: str) -> None:
+    if not delete_saved_team(team_id):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOT_FOUND",
+                "message": f"Team '{team_id}' not found.",
+                "recoverable": True,
+            },
+        )
+    return None
+
+
+def _attachment_meta(rec) -> AttachmentMeta:
+    return AttachmentMeta(
+        id=rec.id,
+        filename=rec.filename,
+        content_type=rec.content_type,
+        size_bytes=rec.size_bytes,
+        created_at=rec.created_at,
+        has_text_excerpt=bool(rec.text_excerpt),
+    )
+
+
+@app.post("/api/attachments", response_model=AttachmentMeta, status_code=201)
+async def upload_attachment(file: UploadFile = File(...)) -> AttachmentMeta:
+    """Accept a demo context file for planning/runs. Returns metadata only (no raw bytes)."""
+    data = await file.read()
+    try:
+        rec = save_upload(
+            filename=file.filename or "upload.bin",
+            content_type=file.content_type or "application/octet-stream",
+            data=data,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": str(exc),
+                "recoverable": True,
+            },
+        ) from exc
+    return _attachment_meta(rec)
+
+
+@app.get("/api/attachments", response_model=AttachmentListResponse)
+async def list_uploaded_attachments() -> AttachmentListResponse:
+    return AttachmentListResponse(
+        attachments=[_attachment_meta(r) for r in list_attachments()]
+    )
+
+
+@app.get("/api/attachments/{attachment_id}", response_model=AttachmentMeta)
+async def get_uploaded_attachment(attachment_id: str) -> AttachmentMeta:
+    rec = get_attachment(attachment_id)
+    if rec is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOT_FOUND",
+                "message": f"Attachment '{attachment_id}' not found.",
+                "recoverable": True,
+            },
+        )
+    return _attachment_meta(rec)
+
+
+@app.delete("/api/attachments/{attachment_id}", status_code=204)
+async def remove_attachment(attachment_id: str) -> None:
+    if not delete_attachment(attachment_id):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOT_FOUND",
+                "message": f"Attachment '{attachment_id}' not found.",
+                "recoverable": True,
+            },
+        )
+    return None
+
+
 @app.post("/api/runs", response_model=CreateRunResponse, status_code=202)
 async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> CreateRunResponse:
     # Validate customer exists
@@ -190,6 +323,24 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
                 "recoverable": True,
             },
         )
+
+    # Merge top-level + context attachment ids; reject unknown ids.
+    att_ids = list(
+        dict.fromkeys([*(request.attachment_ids or []), *(request.context.attachment_ids or [])])
+    )
+    missing = [aid for aid in att_ids if get_attachment(aid) is None]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": f"Unknown attachment id(s): {', '.join(missing)}",
+                "recoverable": True,
+            },
+        )
+    if att_ids:
+        request.context.attachment_ids = att_ids
+        request.attachment_ids = att_ids
 
     plan = build_toyota_execution_plan(request.team)
     run = create_run_record(request, plan)
@@ -217,12 +368,23 @@ async def get_run_status(run_id: str) -> RunStatusResponse:
     return run
 
 
+@app.get("/api/audit-events", response_model=AuditEventsResponse)
+async def audit_events(limit: int = 200) -> AuditEventsResponse:
+    """Recent audit events across runs (Tiger-backed when DB is available)."""
+    return AuditEventsResponse(events=list_audit_events(limit=limit))
+
+
 @app.get("/api/integrations", response_model=IntegrationsResponse)
 async def integrations_status() -> IntegrationsResponse:
     """Non-secret connection status for Settings. Never returns credentials."""
-    llm_status = "CONNECTED" if get_llm_service().is_configured() else "FALLBACK"
-    nessie_status = "CONNECTED" if bool(get_nessie_client().api_key) else "FALLBACK"
-    tiger_status = "CONNECTED" if db.db_available else "UNAVAILABLE"
+    llm = get_llm_service()
+    llm_status = "CONNECTED" if llm.is_configured() else "UNCONFIGURED"
+
+    nessie = get_nessie_client()
+    # Key present → configured for live calls. Absence → UNCONFIGURED (never fake CONNECTED).
+    nessie_status = "CONNECTED" if bool(nessie.api_key) else "UNCONFIGURED"
+
+    tiger_status = "CONNECTED" if db.db_available else "UNCONFIGURED"
     return IntegrationsResponse(
         integrations=[
             IntegrationStatusItem(id="llm", label="AI Model Provider", status=llm_status),

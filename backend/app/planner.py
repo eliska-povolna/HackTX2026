@@ -169,6 +169,23 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
 
 
 async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
+    """Plan a team via LLM only. On failure raise — do not silently substitute a Toyota fallback."""
+    from fastapi import HTTPException
+
+    from app.attachments import planning_context_for_ids
+
+    attachment_ctx = planning_context_for_ids(list(request.attachment_ids or []))
+    missing = [a["id"] for a in attachment_ctx if a.get("missing")]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": f"Unknown attachment id(s): {', '.join(missing)}",
+                "recoverable": True,
+            },
+        )
+
     llm = get_llm_service()
     try:
         team = await llm.plan_team(
@@ -176,6 +193,7 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             max_team_size=request.max_team_size,
             budget_preference=request.budget_preference,
             available_tools=AVAILABLE_TOOLS,
+            attachments=attachment_ctx,
         )
         if len(team.agents) > request.max_team_size:
             team.agents = team.agents[: request.max_team_size]
@@ -184,10 +202,18 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             planner_source=PlannerSource.LLM,
             fallback_used=False,
         )
+    except HTTPException:
+        raise
     except (LLMUnavailableError, Exception) as exc:
-        logger.info("Using fallback team planner: %s", exc)
-        return PlanTeamResponse(
-            team=build_fallback_team(request.goal, request.max_team_size),
-            planner_source=PlannerSource.FALLBACK,
-            fallback_used=True,
-        )
+        logger.warning("Team planner failed (no silent fallback): %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "LLM_UNAVAILABLE",
+                "message": (
+                    "Team planning failed. The AI planner is unavailable or returned "
+                    "an invalid response. Check LLM credentials and try again."
+                ),
+                "recoverable": True,
+            },
+        ) from exc
