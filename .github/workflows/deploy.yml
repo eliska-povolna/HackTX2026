@@ -75,5 +75,28 @@ jobs:
           fi
           backend/.venv/bin/pip install -r backend/requirements.txt
           sudo systemctl restart questmaster-backend
-          curl -f http://127.0.0.1:8000/api/health
+          sleep 2
+          if ! sudo systemctl is-active --quiet questmaster-backend; then
+            echo "questmaster-backend is not active after restart" >&2
+            sudo systemctl status questmaster-backend --no-pager -l || true
+            sudo journalctl -u questmaster-backend -n 80 --no-pager || true
+            exit 1
+          fi
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health; then
+              echo
+              ok=1
+              break
+            fi
+            echo "health attempt $i/30 failed; waiting..."
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "Backend health check failed" >&2
+            sudo systemctl status questmaster-backend --no-pager -l || true
+            sudo journalctl -u questmaster-backend -n 120 --no-pager || true
+            ss -lptn 'sport = :8000' || true
+            exit 1
+          fi
           EOF
