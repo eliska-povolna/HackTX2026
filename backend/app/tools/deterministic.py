@@ -392,7 +392,17 @@ def rank_customers(
             }
         )
 
-    ranked.sort(key=lambda r: r["score"], reverse=True)
+    if purpose_l in {"loan", "loan_opportunity", "lending"}:
+        # Preserve transparent capped scores, but do not let fixture order
+        # decide which equally scored customer is presented as strongest.
+        ranked.sort(key=lambda r: (
+            r["score"],
+            r["financial_summary"].get("safe_mobility_budget") or 0,
+            r["financial_summary"].get("emergency_runway_months") or 0,
+            r["financial_summary"].get("monthly_free_cashflow") or 0,
+        ), reverse=True)
+    else:
+        ranked.sort(key=lambda r: r["score"], reverse=True)
     return {
         "purpose": purpose_l,
         "candidates": ranked,

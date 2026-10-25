@@ -86,6 +86,30 @@ def align_portfolio_team(team, kind):
     decision.allowed_integrations = [
         name for name in decision.allowed_integrations if name != "nessie"
     ]
+    if kind == "loan_opportunity":
+        finance.purpose = "Load the full Toyota demo portfolio and derive banking summaries for financial-fit ranking, without mobility relevance filtering."
+        finance.instructions += " Runtime contract: evaluate every portfolio customer; do not filter by the mobility decision window."
+        finance.allowed_tools = [
+            tool
+            for tool in finance.allowed_tools
+            if tool not in {"filter_mobility_portfolio", "evaluate_mobility_relevance"}
+        ]
+        finance.skills = [
+            "portfolio_context",
+            "financial_context",
+            "affordability",
+            "cashflow_analysis",
+        ]
+        decision.purpose = "Rank derived financial fit with CODE, then explain the loan-opportunity shortlist. No mobility scoring, loan approvals or offers."
+        decision.allowed_tools = [
+            tool
+            for tool in decision.allowed_tools
+            if tool not in {"score_mobility_options", "synthesize_recommendation"}
+        ]
+        decision.skills = ["ranking", "tradeoff_synthesis", "shortlist_explanation"]
+    else:
+        finance.purpose = "Filter the Toyota portfolio for relevant mobility decisions before deriving banking summaries for those customers only."
+        decision.purpose = "Score mobility options with CODE, rank decision urgency, and explain the relevant customer shortlist."
     context_candidates = [
         a
         for a in working.agents
@@ -273,6 +297,7 @@ async def explain_portfolio(task, agent, ctx, run_id, costs, request):
     minimized = [
         {
             "customer_id": c["customer_id"],
+            "name": c["name"],
             "score": c["score"],
             "reasons": c["reasons"],
             "financial_summary": c["financial_summary"],
@@ -316,7 +341,7 @@ async def explain_portfolio(task, agent, ctx, run_id, costs, request):
         system = build_agent_system_prompt(
             agent,
             ctx["team_policy"],
-            task_instruction="Explain the supplied deterministic demo ranking. Do not change scores, invent eligibility decisions, or claim to approve loans or send offers. For mobility explain the supplied next actions. Distinguish fixture banking from live Nessie. Use a short paragraph; only supplied derived facts.",
+            task_instruction="Explain the supplied deterministic demo ranking. Do not change scores, invent eligibility decisions, or claim to approve loans or send offers. For mobility explain the supplied next actions. Distinguish fixture banking from live Nessie. Use two or three short sentences under 90 words. Use customer display names, never internal IDs or field names. Mention at most the top two priorities and why; do not reproduce the financial table. Only supplied derived facts.",
         )
         data = await llm._post_chat_completion(
             headers={
