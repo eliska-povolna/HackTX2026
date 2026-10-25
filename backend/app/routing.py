@@ -58,6 +58,11 @@ CAPABILITIES: dict[str, Capability] = {
         reason="Deterministic implementation available",
         deterministic=True,
     ),
+    "check_affordability_signals": Capability(
+        executor=ExecutorType.CODE,
+        reason="Deterministic implementation available",
+        deterministic=True,
+    ),
     "review_recommendation": Capability(
         executor=ExecutorType.LLM,
         reason="Natural-language synthesis required",

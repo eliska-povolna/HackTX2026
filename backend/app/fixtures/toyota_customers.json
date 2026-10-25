@@ -54,5 +54,33 @@
       "estimated_upgrade_payment": 585
     },
     "nessie_customer_id": "8867eae3-b33d-4fa0-b64a-13d331dceec2"
+  },
+  {
+    "id": "customer-no-action",
+    "name": "Alex Kim",
+    "scenario_label": "No decision window",
+    "description": "Lease far from maturity and usage stable — relevance gate should stop before Nessie/LLM.",
+    "vehicle": {
+      "year": 2023,
+      "make": "Toyota",
+      "model": "RAV4",
+      "mileage": 18000
+    },
+    "contract": {
+      "type": "LEASE",
+      "months_remaining": 18,
+      "monthly_payment": 449.0,
+      "buyout_amount": 26000.0
+    },
+    "usage": {
+      "monthly_miles_current": 900,
+      "monthly_miles_six_months_ago": 920,
+      "change_percent": -2.2
+    },
+    "market_assumptions": {
+      "estimated_vehicle_value": 27500,
+      "estimated_upgrade_payment": 560
+    },
+    "nessie_customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709"
   }
 ]

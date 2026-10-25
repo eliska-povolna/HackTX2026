@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
+from app.agent_assignment import AgentAssignmentError, assign_toyota_roles
 from app.context_sources import (
     nessie_enabled,
     resolve_enabled_ids,
@@ -37,6 +38,7 @@ from app.models import (
     TeamPolicy,
     ToyotaRecommendation,
 )
+from app.team_normalize import ensure_team_runtime_config
 from app.permissions import (
     PermissionDenied,
     assert_integration_allowed,
@@ -96,31 +98,18 @@ def build_toyota_execution_plan(
             "Context source 'toyota_customer' is required for the Mobility Decision Team."
         )
 
+    team = ensure_team_runtime_config(team)
     agents = {a.id: a for a in team.agents}
-    context_id = _pick_agent(
-        agents,
-        ["context-agent"],
-        "context",
-        skills=["customer_context", "signal_detection", "data_scoping"],
-    )
-    financial_id = _pick_agent(
-        agents,
-        ["financial-agent"],
-        "financial",
-        skills=["cashflow_analysis", "financial_context", "affordability"],
-    )
-    vehicle_id = _pick_agent(
-        agents,
-        ["vehicle-agent"],
-        "vehicle",
-        skills=["vehicle_fit", "mobility_options", "usage_analysis"],
-    )
-    decision_id = _pick_agent(
-        agents,
-        ["decision-agent"],
-        "decision",
-        skills=["recommendation", "tradeoff_synthesis", "customer_guidance"],
-    )
+    try:
+        roles = assign_toyota_roles(team.agents)
+    except AgentAssignmentError as exc:
+        raise ValueError(str(exc)) from exc
+
+    context_id = roles["context"]
+    financial_id = roles["financial"]
+    vehicle_id = roles["vehicle"]
+    decision_id = roles["decision"]
+    affordability_id = roles.get("affordability")
 
     tasks: list[TaskDefinition] = [
         _task(
@@ -165,13 +154,42 @@ def build_toyota_execution_plan(
                     depends_on=["load-nessie-financials"],
                     risk_level=RiskLevel.medium,
                 ),
+            ]
+        )
+        score_depends = ["build-financial-context", "load-toyota-context"]
+        if affordability_id:
+            aff = agents[affordability_id]
+            # CODE affordability check: needs financial_summary + read/calculate (no tool grant).
+            can_check = (
+                "financial_summary" in aff.permissions.data_scopes
+                and any(a in aff.permissions.actions for a in ("read", "calculate"))
+            )
+            if can_check:
+                tasks.append(
+                    _task(
+                        task_id="check-affordability-signals",
+                        name="Check affordability signals",
+                        agent_id=affordability_id,
+                        action="check_affordability_signals",
+                        agents=agents,
+                        depends_on=["build-financial-context"],
+                        risk_level=RiskLevel.low,
+                    )
+                )
+                score_depends = [
+                    "build-financial-context",
+                    "load-toyota-context",
+                    "check-affordability-signals",
+                ]
+        tasks.extend(
+            [
                 _task(
                     task_id="score-mobility-options",
                     name="Compare ownership options",
                     agent_id=vehicle_id,
                     action="score_mobility_options",
                     agents=agents,
-                    depends_on=["build-financial-context", "load-toyota-context"],
+                    depends_on=score_depends,
                     risk_level=RiskLevel.medium,
                 ),
                 _task(
@@ -196,34 +214,6 @@ def build_toyota_execution_plan(
         )
 
     return ExecutionPlan(tasks=tasks)
-
-
-def _pick_agent(
-    agents: dict[str, AgentDefinition],
-    preferred: list[str],
-    hint: str,
-    skills: Optional[list[str]] = None,
-) -> str:
-    """Prefer explicit ids, then role/id hint, then skill overlap. Skills never grant permissions."""
-    for pid in preferred:
-        if pid in agents:
-            return pid
-    for aid, agent in agents.items():
-        if hint in aid or hint in agent.role.lower():
-            return aid
-    if skills:
-        best_id = None
-        best_score = 0
-        wanted = {s.lower() for s in skills}
-        for aid, agent in agents.items():
-            have = {s.lower() for s in (agent.skills or [])}
-            score = len(wanted & have)
-            if score > best_score:
-                best_score = score
-                best_id = aid
-        if best_id and best_score > 0:
-            return best_id
-    return next(iter(agents)) if agents else "unknown-agent"
 
 
 def _team_policy(team: TeamDefinition) -> TeamPolicy:
@@ -332,6 +322,7 @@ def _skip_remaining_tasks(run_id: str, pending: dict[str, RunTaskState], reason:
 
 async def execute_run(run_id: str, request: CreateRunRequest) -> None:
     """Background execution for one run."""
+    request.team = ensure_team_runtime_config(request.team)
     source_ids = _merged_context_source_ids(request)
     plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None)
     agents = _agents_by_id(request.team)
@@ -899,6 +890,39 @@ async def _run_code(
 
     if task.action == "run_evaluators":
         return "Prepared deterministic evaluator suite."
+
+    if task.action == "check_affordability_signals":
+        financial = ctx.get("financial")
+        if not financial:
+            raise RuntimeError("FinancialContext missing for affordability check")
+        stress = financial.financial_stress
+        budget = financial.safe_mobility_budget
+        runway = financial.emergency_runway_months
+        summary = (
+            f"Affordability signals: stress={stress}, "
+            f"safe_mobility_budget=${budget:.0f}, runway={runway:.1f} months."
+        )
+        append_output(
+            run_id,
+            OutputItem(
+                id=f"out-{uuid4().hex[:8]}",
+                title="Affordability Signals",
+                agent_id=agent.id,
+                type="ANALYSIS",
+                summary=summary,
+                content=json.dumps(
+                    {
+                        "financial_stress": stress,
+                        "safe_mobility_budget": budget,
+                        "emergency_runway_months": runway,
+                    }
+                ),
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                cost_usd=0.0,
+                source_type="CODE",
+            ),
+        )
+        return summary
 
     raise RuntimeError(f"Unsupported CODE action: {task.action}")
 

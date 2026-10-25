@@ -129,10 +129,15 @@ CODE `evaluate_mobility_relevance` can stop a run as `NO_ACTION_NEEDED` before N
 
 > Same team. Same Toyota. Different financial reality. Different recommendation.
 
-| Customer | ID | Recommendation |
+| Customer | ID | Outcome |
 |---|---|---|
 | Sarah Miller | `customer-stable` | `BUY_CURRENT_VEHICLE` |
 | Jordan Lee | `customer-stressed` | `RETURN_VEHICLE` |
+| Alex Kim | `customer-no-action` | `NO_ACTION_NEEDED` (relevance gate; 0 Nessie / 0 LLM) |
+
+Tasks are assigned by **role / skills / tools**, not by hard-coded `context-agent` ids — so LLM-planned teams (`agent_toyota_context`, `agent_financial_profiler`, …) spread work across agents. If assignment would collapse onto one agent while others exist, the run fails clearly.
+
+Every planned/saved team is normalized so **agent budgets** and **TeamPolicy** always exist before enforcement (server ∧ team ∧ agent).
 
 Typical path: TOOL (Toyota) → CODE (relevance) → TOOL (Nessie) → CODE (FinancialContext) → CODE (score) → LLM (synthesize) → CODE (evaluators). Thorough mode may add a STRONG Reviewer LLM step.
 

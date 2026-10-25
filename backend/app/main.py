@@ -460,6 +460,10 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
         request.context_source_ids = source_ids
         request.context.context_source_ids = source_ids
 
+    from app.team_normalize import ensure_team_runtime_config
+
+    request.team = ensure_team_runtime_config(request.team)
+
     try:
         plan = build_toyota_execution_plan(
             request.team, context_source_ids=source_ids or None

@@ -45,7 +45,10 @@ def test_templates(client):
 def test_demo_customers(client):
     r = client.get("/api/demo/customers")
     assert r.status_code == 200
-    assert len(r.json()["customers"]) == 2
+    ids = [c["id"] for c in r.json()["customers"]]
+    assert "customer-stable" in ids
+    assert "customer-stressed" in ids
+    assert "customer-no-action" in ids
 
 
 def test_plan_team_errors_when_llm_unavailable(client, monkeypatch):

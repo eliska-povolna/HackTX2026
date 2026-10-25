@@ -64,6 +64,12 @@ ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
         tools=("run_evaluators",),
         actions_any=("read", "synthesize", "recommend"),
     ),
+    "check_affordability_signals": ActionRequirements(
+        # Deterministic CODE gate — authorized by data scope + actions, not a tool grant.
+        tools=(),
+        data_scopes=("financial_summary",),
+        actions_any=("read", "calculate"),
+    ),
     "review_recommendation": ActionRequirements(
         tools=("review_recommendation",),
         data_scopes=("financial_summary",),

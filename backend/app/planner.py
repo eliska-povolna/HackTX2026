@@ -17,6 +17,7 @@ from app.models import (
     TeamPolicy,
 )
 from app.services.llm_service import LLMUnavailableError, get_llm_service
+from app.team_normalize import ensure_team_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,7 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             )
         elif not team.policy.work_style:
             team.policy.work_style = work_style
+        team = ensure_team_runtime_config(team)
         return PlanTeamResponse(
             team=team,
             planner_source=PlannerSource.LLM,
