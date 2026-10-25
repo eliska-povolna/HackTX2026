@@ -334,6 +334,64 @@ def _coerce_team_dict(raw: dict, *, max_team_size: int) -> dict:
     return data
 
 
+def extract_chat_message_text(raw: object) -> str:
+    """Pull assistant text from OpenAI-compatible (and slight variants) chat payloads."""
+
+    def _from_content(content: object) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    for key in ("text", "content", "value"):
+                        value = part.get(key)
+                        if isinstance(value, str) and value.strip():
+                            parts.append(value)
+                            break
+            return "".join(parts).strip()
+        return str(content).strip()
+
+    if not isinstance(raw, dict):
+        return ""
+
+    choices = raw.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice, dict) else None
+        if isinstance(message, dict):
+            for key in ("content", "text", "reasoning", "output_text"):
+                text = _from_content(message.get(key))
+                if text:
+                    return text
+        for key in ("text", "content"):
+            text = _from_content(choice.get(key) if isinstance(choice, dict) else None)
+            if text:
+                return text
+
+    for key in ("output_text", "text", "content"):
+        text = _from_content(raw.get(key))
+        if text:
+            return text
+
+    output = raw.get("output")
+    if isinstance(output, list):
+        chunks: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            chunks.append(_from_content(item.get("content") or item.get("text")))
+        joined = "\n".join(chunk for chunk in chunks if chunk).strip()
+        if joined:
+            return joined
+
+    return ""
+
+
 def _extract_json_object(content: str) -> dict:
     """Parse JSON from model output, tolerating markdown fences and leading prose."""
     text = content.strip()

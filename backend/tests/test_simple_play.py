@@ -90,6 +90,9 @@ def test_simple_play_plan_and_run(monkeypatch):
     assert result["metrics"]["llm_calls"] >= 0
     assert any(t["action"] == "simple_play" for t in result["tasks"])
     assert result["tasks"][0]["status"] == "COMPLETED"
+    outputs = result.get("outputs") or []
+    assert outputs, "simple_play must publish at least one output"
+    assert any((o.get("content") or o.get("summary") or "").strip() for o in outputs)
 
 
 def test_build_simple_play_plan_routes_to_llm():
