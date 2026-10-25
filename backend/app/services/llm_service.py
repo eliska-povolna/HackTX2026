@@ -140,9 +140,9 @@ class LLMService:
             "Prefer CODE/TOOL capabilities for deterministic work; only create AGENT "
             "(LLM) responsibilities when judgment or synthesis is required. "
             "For a portfolio mobility or vehicle-loan targeting goal, prefer TWO responsibilities: "
-            "Financial Context Analyst (load_toyota_portfolio, filter_mobility_portfolio, evaluate_mobility_relevance, build_portfolio_financials, nessie_load_customer_financials; raw/summary scopes; read/calculate; nessie grant) and "
+            "Financial Context Analyst (load_toyota_portfolio, build_portfolio_financials, nessie_load_customer_financials; raw/summary scopes; read/calculate; nessie grant) and "
             "Shortlist Strategist (rank_customers, score_mobility_options for mobility, explain_shortlist; financial_summary; read/calculate/synthesize/recommend; meta grant). "
-            "Use scope=portfolio and workflow_kind=loan_opportunity or mobility_decision. Loan targeting ranks financial fit, mobility filters relevance first. "
+            "Use scope=portfolio and workflow_kind=loan_opportunity or mobility_decision. Loan targeting ranks financial fit for ALL customers; do NOT describe mobility relevance filtering or option scoring in its roles/skills. Only mobility adds filter_mobility_portfolio and evaluate_mobility_relevance to finance, and score_mobility_options to the strategist. "
             "For SINGLE-CUSTOMER mobility only: " + _toyota_capability_contract()
         )
         user_payload: dict[str, Any] = {

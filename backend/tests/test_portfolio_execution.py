@@ -145,6 +145,9 @@ def test_portfolio_plan_and_run_use_arbitrary_agent_ids(client, monkeypatch):
     assert planned.status_code == 200, planned.text
     assert planned.json()["team"]["policy"]["workflow_kind"] == "loan_opportunity"
     assert len(planned.json()["team"]["agents"]) == 2
+    finance = next(a for a in planned.json()["team"]["agents"] if "build_portfolio_financials" in a["allowed_tools"])
+    assert "filter_mobility_portfolio" not in finance["allowed_tools"]
+    assert "full Toyota demo portfolio" in finance["purpose"]
     assert planned.json()["job_analysis"]["scope"] == "portfolio"
     from app.models import TeamDefinition
 
