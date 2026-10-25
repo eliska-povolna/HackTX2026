@@ -219,6 +219,20 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
 
     from app.attachments import planning_context_for_ids
 
+    goal = (request.goal or "").strip()
+    if len(goal) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "NEED_MORE_INFO",
+                "message": (
+                    "Need more information to plan a team. Describe the goal with "
+                    "enough detail (who, what outcome, and any domain constraints)."
+                ),
+                "recoverable": True,
+            },
+        )
+
     attachment_ctx = planning_context_for_ids(list(request.attachment_ids or []))
     missing = [a["id"] for a in attachment_ctx if a.get("missing")]
     if missing:
@@ -235,12 +249,13 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
     llm = get_llm_service()
     try:
         team = await llm.plan_team(
-            goal=request.goal,
+            goal=goal,
             max_team_size=request.max_team_size,
             budget_preference=request.budget_preference,
             available_tools=AVAILABLE_TOOLS,
             attachments=attachment_ctx,
             work_style=work_style,
+            context_source_ids=list(request.context_source_ids or []),
         )
         if len(team.agents) > request.max_team_size:
             team.agents = team.agents[: request.max_team_size]

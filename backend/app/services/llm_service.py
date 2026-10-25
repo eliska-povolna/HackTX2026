@@ -73,6 +73,7 @@ class LLMService:
         available_tools: list[str],
         attachments: Optional[list[dict]] = None,
         work_style: str = "balanced",
+        context_source_ids: Optional[list[str]] = None,
     ) -> TeamDefinition:
         if not self.is_configured():
             raise LLMUnavailableError("No LLM provider configured")
@@ -85,6 +86,7 @@ class LLMService:
                 available_tools=available_tools,
                 attachments=attachments or [],
                 work_style=work_style,
+                context_source_ids=context_source_ids or [],
             )
 
         raise LLMUnavailableError(f"Unsupported LLM provider: {self.provider}")
@@ -97,6 +99,7 @@ class LLMService:
         available_tools: list[str],
         attachments: list[dict],
         work_style: str = "balanced",
+        context_source_ids: Optional[list[str]] = None,
     ) -> TeamDefinition:
         from app.model_router import ModelRoutingError, choose_model
 
@@ -116,12 +119,15 @@ class LLMService:
             "(integer > 0). Optional: instructions, guardrails, model_policy, "
             "estimated_cost_usd, allowed_integrations (named refs like nessie/meta — "
             "never include secret values). "
-            "Give agents distinct ids/roles (context, financial, vehicle/mobility, "
-            "decision, optional affordability/risk, optional reviewer) so tasks can "
-            "be assigned without collapsing onto one agent. "
+            "Give agents distinct human-readable names AND distinct ids/roles so tasks "
+            "can be assigned without collapsing onto one agent. "
             f"Return at most {max_team_size} agents. "
             "Prefer tools from available_tools when relevant. "
-            "If attachments are provided, tailor the team to use that context."
+            "Match the team to the goal domain — hospitality, research, support, "
+            "engineering, etc. Only plan a Toyota/mobility financial team when the "
+            "goal or enabled context_sources clearly involve vehicle/mobility/"
+            "Toyota customer decisions. Do not force Toyota roles for unrelated goals. "
+            "If attachments or context_sources are provided, tailor the team to use them."
         )
         user_payload: dict[str, Any] = {
             "goal": goal,
@@ -131,6 +137,8 @@ class LLMService:
         }
         if attachments:
             user_payload["attachments"] = attachments
+        if context_source_ids:
+            user_payload["context_source_ids"] = list(context_source_ids)
 
         headers = {
             "Authorization": f"Bearer {self.meta_api_key}",
