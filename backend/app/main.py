@@ -433,6 +433,11 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
             },
         )
 
+    from app.workflow_support import require_supported_responsibility, require_supported_team
+
+    require_supported_responsibility(request.goal)
+    require_supported_team(request.team)
+
     # Merge top-level + context attachment ids; reject unknown ids.
     att_ids = list(
         dict.fromkeys([*(request.attachment_ids or []), *(request.context.attachment_ids or [])])
@@ -462,25 +467,8 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
 
     from app.executor import mobility_relevant
     from app.team_normalize import ensure_team_runtime_config
-    from app.workflow_validate import validate_team_against_workflow
 
     request.team = ensure_team_runtime_config(request.team)
-    aligned = validate_team_against_workflow(
-        request.team,
-        context_source_ids=source_ids or None,
-        repair=True,
-    )
-    if not aligned.ok:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "PERMISSION_DENIED",
-                "message": "; ".join(aligned.errors[:4]) or "Team is not ready for this workflow.",
-                "recoverable": True,
-            },
-        )
-    request.team = aligned.team
-
     relevant = mobility_relevant(request.context.customer_id)
     try:
         plan = build_toyota_execution_plan(
@@ -515,6 +503,16 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
                 "recoverable": True,
             },
         )
+
+    from app.permissions import PermissionDenied, validate_task_permissions
+
+    try:
+        for task in plan.tasks:
+            validate_task_permissions(agents[task.assigned_agent_id], task)
+    except PermissionDenied as exc:
+        raise HTTPException(status_code=400, detail={
+            "code": "PERMISSION_DENIED", "message": exc.message, "recoverable": True,
+        }) from exc
 
     run = create_run_record(request, plan)
     background.add_task(execute_run, run.run_id, request)

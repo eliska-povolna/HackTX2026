@@ -64,6 +64,11 @@ from app.tools.toyota import load_toyota_customer
 logger = logging.getLogger(__name__)
 
 
+class BudgetLimitError(RuntimeError):
+    """A configured server, team or agent ceiling prevented model work."""
+
+
+
 def _task(
     *,
     task_id: str,
@@ -514,7 +519,7 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
             )
             if ctx.get("review_status") == "FAIL":
                 def _finalize_fail(r) -> None:
-                    r.status = RunStatus.FAILED
+                    r.status = RunStatus.FAILED if ctx["budget_ok"] else RunStatus.BUDGET_LIMIT
                     r.financial_context = ctx["financial"]
                     r.recommendation = ctx["recommendation"]
                     r.metrics = type(r.metrics).model_validate(costs.metrics_dict())
@@ -582,11 +587,12 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
                 result=ev.status.value,
             )
     except Exception as exc:
+        final_status = RunStatus.BUDGET_LIMIT if isinstance(exc, BudgetLimitError) else RunStatus.FAILED
         logger.exception("Run %s failed: %s", run_id, exc)
         update_run(
             run_id,
             lambda r: (
-                setattr(r, "status", RunStatus.FAILED),
+                setattr(r, "status", final_status),
                 setattr(r, "metrics", type(r.metrics).model_validate(costs.metrics_dict())),
             ),
         )
@@ -595,7 +601,7 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
             agent_id=None,
             event_type="RUN_COMPLETED",
             message=f"Run failed: {exc}",
-            result="FAILED",
+            result=final_status.value,
         )
 
 
@@ -675,7 +681,7 @@ async def _execute_task(
             data_source = DataSource.LLM.value
             if not ok:
                 ctx["budget_ok"] = False
-                raise RuntimeError("LLM budget exceeded")
+                raise BudgetLimitError("LLM budget exceeded")
         else:
             raise RuntimeError(f"Unknown executor {task.executor}")
     except PermissionDenied as exc:
@@ -994,7 +1000,7 @@ async def _run_llm(
             ),
             cost_usd=0.0,
         )
-        raise RuntimeError("BUDGET_LIMIT: cannot afford LLM synthesis")
+        raise BudgetLimitError("BUDGET_LIMIT: cannot afford LLM synthesis")
 
     try:
         model_decision = choose_model(

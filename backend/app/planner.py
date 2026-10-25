@@ -246,6 +246,10 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             },
         )
 
+    from app.workflow_support import require_supported_responsibility, require_supported_team
+
+    require_supported_responsibility(goal, planning=True, answers=request.planning_answers)
+
     work_style = work_style_from_budget_preference(request.budget_preference)
     llm = get_llm_service()
     try:
@@ -268,6 +272,7 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
         elif not team.policy.work_style:
             team.policy.work_style = work_style
         team = ensure_team_runtime_config(team)
+        require_supported_team(team)
 
         # Toyota mobility runs use a fixed workflow. Align capabilities at PLAN
         # time (never at execution), then validate before returning READY_TO_RUN.
