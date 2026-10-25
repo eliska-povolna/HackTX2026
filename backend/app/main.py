@@ -30,6 +30,8 @@ from app.models import (
     DemoCustomerDetail,
     DemoCustomerSummary,
     DemoCustomersResponse,
+    DemoSessionResponse,
+    DemoSessionUser,
     ErrorDetail,
     ErrorResponse,
     HealthResponse,
@@ -48,7 +50,13 @@ from app.models import (
     TemplatesResponse,
 )
 from app.planner import plan_team as plan_team_orchestrator
-from app.run_store import create_run_record, get_run, list_audit_events, list_runs
+from app.run_store import (
+    create_run_record,
+    get_run,
+    get_run_audit_events,
+    list_audit_events,
+    list_runs,
+)
 from app.services.llm_service import get_llm_service
 from app.team_store import delete_saved_team, get_saved_team, list_saved_teams, save_team
 from app.tools.nessie import get_nessie_client
@@ -110,6 +118,20 @@ async def health() -> HealthResponse:
         status="ok",
         service="questmaster-api",
         version="0.2.0",
+    )
+
+
+@app.post("/api/demo-session", response_model=DemoSessionResponse)
+async def demo_session() -> DemoSessionResponse:
+    """Hackathon demo session — no real auth."""
+    return DemoSessionResponse(
+        user=DemoSessionUser(
+            id=os.getenv("DEFAULT_DEMO_USER_ID") or "demo-user",
+            name="Alex Morgan",
+            organization="Toyota Financial Services",
+            role="Team Builder",
+        ),
+        workspace_id=os.getenv("DEFAULT_WORKSPACE_ID") or "toyota-demo",
     )
 
 
@@ -366,6 +388,21 @@ async def get_run_status(run_id: str) -> RunStatusResponse:
             },
         )
     return run
+
+
+@app.get("/api/runs/{run_id}/audit", response_model=AuditEventsResponse)
+async def get_run_audit(run_id: str) -> AuditEventsResponse:
+    events = get_run_audit_events(run_id)
+    if events is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOT_FOUND",
+                "message": f"Run '{run_id}' not found.",
+                "recoverable": True,
+            },
+        )
+    return AuditEventsResponse(events=events)
 
 
 @app.get("/api/audit-events", response_model=AuditEventsResponse)

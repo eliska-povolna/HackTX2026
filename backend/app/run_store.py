@@ -15,6 +15,8 @@ from app.models import (
     AuditEventListItem,
     CreateRunRequest,
     ExecutionPlan,
+    ExecutorType,
+    FinancialContext,
     OutputItem,
     RunListItem,
     RunMetrics,
@@ -22,6 +24,7 @@ from app.models import (
     RunStatusResponse,
     RunTaskState,
     TaskStatus,
+    ToyotaRecommendation,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,20 +87,50 @@ def get_run(run_id: str) -> Optional[RunStatusResponse]:
         run = _runs.get(run_id)
         if run is not None:
             return run.model_copy(deep=True)
-    # try DB hydrate if memory miss
+    return _hydrate_run_from_db(run_id)
+
+
+def get_run_audit_events(run_id: str) -> Optional[list[AuditEventListItem]]:
+    """Return audit events for one run, or None if the run does not exist."""
+    if not _run_exists(run_id):
+        return None
+
     if db.db_available:
         try:
             with db.session_scope() as session:
-                if session is None:
-                    return None
-                row = session.get(RunRow, run_id)
-                if row is None:
-                    return None
-                # minimal hydrate — prefer memory for live polls
-                return None
+                if session is not None:
+                    rows = (
+                        session.query(AuditLogRow)
+                        .filter(AuditLogRow.run_id == run_id)
+                        .order_by(AuditLogRow.timestamp.desc())
+                        .limit(500)
+                        .all()
+                    )
+                    return [_audit_item_from_row(row) for row in rows]
         except Exception as exc:
-            logger.debug("DB get_run skipped: %s", exc)
-    return None
+            logger.warning("get_run_audit_events DB failed: %s", exc)
+
+    events: list[AuditEventListItem] = []
+    with _lock:
+        run = _runs.get(run_id)
+        if run is not None:
+            for ev in run.audit_events:
+                events.append(
+                    AuditEventListItem(
+                        id=ev.id,
+                        timestamp=ev.timestamp,
+                        run_id=ev.run_id,
+                        agent_id=ev.agent_id,
+                        event_type=ev.event_type,
+                        executor_type=ev.executor_type.value if ev.executor_type else None,
+                        resource=ev.resource,
+                        result=ev.result,
+                        message=ev.message,
+                        cost_usd=ev.cost_usd,
+                    )
+                )
+    events.sort(key=lambda e: e.timestamp, reverse=True)
+    return events
 
 
 def list_runs() -> list[RunListItem]:
@@ -255,6 +288,183 @@ def _audit_item_from_row(row: AuditLogRow) -> AuditEventListItem:
         message=row.message or "",
         cost_usd=float(row.cost_usd or 0.0),
     )
+
+
+def _run_exists(run_id: str) -> bool:
+    with _lock:
+        if run_id in _runs:
+            return True
+    if not db.db_available:
+        return False
+    try:
+        with db.session_scope() as session:
+            if session is None:
+                return False
+            return session.get(RunRow, run_id) is not None
+    except Exception:
+        return False
+
+
+def _hydrate_run_from_db(run_id: str) -> Optional[RunStatusResponse]:
+    if not db.db_available:
+        return None
+    try:
+        with db.session_scope() as session:
+            if session is None:
+                return None
+            row = session.get(RunRow, run_id)
+            if row is None:
+                return None
+
+            plan_raw = row.execution_plan_json or {"tasks": []}
+            try:
+                plan = ExecutionPlan.model_validate(plan_raw)
+            except Exception:
+                plan = ExecutionPlan(tasks=[])
+
+            tasks: list[RunTaskState] = []
+            for t in plan.tasks:
+                tasks.append(
+                    RunTaskState(
+                        id=t.id,
+                        name=t.name,
+                        assigned_agent_id=t.assigned_agent_id,
+                        executor=t.executor,
+                        action=t.action,
+                        status=TaskStatus.COMPLETED
+                        if row.status == RunStatus.COMPLETED.value
+                        else TaskStatus.WAITING,
+                        depends_on=list(t.depends_on),
+                        risk_level=t.risk_level,
+                        activity_summary="Restored from persisted run.",
+                    )
+                )
+
+            metrics = RunMetrics()
+            if isinstance(row.metrics_json, dict):
+                try:
+                    metrics = RunMetrics.model_validate(row.metrics_json)
+                except Exception:
+                    pass
+
+            financial = None
+            if isinstance(row.financial_context_json, dict):
+                try:
+                    financial = FinancialContext.model_validate(row.financial_context_json)
+                except Exception:
+                    pass
+
+            recommendation = None
+            if isinstance(row.recommendation_json, dict):
+                try:
+                    recommendation = ToyotaRecommendation.model_validate(
+                        row.recommendation_json
+                    )
+                except Exception:
+                    pass
+
+            outputs: list[OutputItem] = []
+            for o in (
+                session.query(OutputRow)
+                .filter(OutputRow.run_id == run_id)
+                .order_by(OutputRow.created_at.asc())
+                .all()
+            ):
+                created = o.created_at
+                if created is not None and created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                ts = (
+                    created.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if created
+                    else _utcnow()
+                )
+                outputs.append(
+                    OutputItem(
+                        id=o.id,
+                        title=o.title,
+                        agent_id=o.agent_id,
+                        type=o.type,
+                        summary=o.summary or "",
+                        content=o.content or "",
+                        timestamp=ts,
+                        cost_usd=float(o.cost_usd or 0.0),
+                        source_type=o.source_type or "CODE",
+                    )
+                )
+
+            audit_events: list[AuditEvent] = []
+            for a in (
+                session.query(AuditLogRow)
+                .filter(AuditLogRow.run_id == run_id)
+                .order_by(AuditLogRow.timestamp.asc())
+                .all()
+            ):
+                ts = a.timestamp
+                if ts is not None and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                timestamp = (
+                    ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if ts
+                    else _utcnow()
+                )
+                executor = None
+                if a.executor_type:
+                    try:
+                        executor = ExecutorType(a.executor_type)
+                    except ValueError:
+                        executor = None
+                audit_events.append(
+                    AuditEvent(
+                        id=a.id,
+                        timestamp=timestamp,
+                        run_id=a.run_id,
+                        agent_id=a.agent_id,
+                        event_type=a.event_type,
+                        executor_type=executor,
+                        resource=a.resource,
+                        result=a.result,
+                        message=a.message or "",
+                        cost_usd=float(a.cost_usd or 0.0),
+                    )
+                )
+
+            created = row.created_at
+            updated = row.updated_at or row.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if updated is not None and updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            try:
+                status = RunStatus(row.status)
+            except ValueError:
+                status = RunStatus.FAILED
+
+            return RunStatusResponse(
+                run_id=row.id,
+                status=status,
+                goal=row.goal or "",
+                created_at=(
+                    created.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if created
+                    else _utcnow()
+                ),
+                updated_at=(
+                    updated.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if updated
+                    else _utcnow()
+                ),
+                plan=plan,
+                tasks=tasks,
+                metrics=metrics,
+                financial_context=financial,
+                recommendation=recommendation,
+                outputs=outputs,
+                evaluators=[],  # evaluators are not persisted separately yet
+                audit_events=audit_events,
+            )
+    except Exception as exc:
+        logger.warning("hydrate run %s failed: %s", run_id, exc)
+        return None
 
 
 def _duration_ms(run: RunStatusResponse) -> Optional[int]:

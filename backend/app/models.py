@@ -189,6 +189,18 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class DemoSessionUser(BaseModel):
+    id: str
+    name: str
+    organization: str
+    role: str
+
+
+class DemoSessionResponse(BaseModel):
+    user: DemoSessionUser
+    workspace_id: str
+
+
 # --- Templates (API_SPEC §6) ---
 
 

@@ -22,6 +22,19 @@ def test_health(client):
     assert r.json()["status"] == "ok"
 
 
+def test_demo_session(client):
+    r = client.post("/api/demo-session", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["user"]["id"]
+    assert body["workspace_id"]
+
+
+def test_run_audit_404(client):
+    r = client.get("/api/runs/run-does-not-exist/audit")
+    assert r.status_code == 404
+
+
 def test_templates(client):
     r = client.get("/api/templates")
     assert r.status_code == 200
