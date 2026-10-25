@@ -1,0 +1,58 @@
+[
+  {
+    "id": "customer-stable",
+    "name": "Sarah Miller",
+    "scenario_label": "Financially stable",
+    "description": "Strong reserve and stable cash flow.",
+    "vehicle": {
+      "year": 2023,
+      "make": "Toyota",
+      "model": "RAV4",
+      "mileage": 31000
+    },
+    "contract": {
+      "type": "LEASE",
+      "months_remaining": 2,
+      "monthly_payment": 469.0,
+      "buyout_amount": 24500.0
+    },
+    "usage": {
+      "monthly_miles_current": 650,
+      "monthly_miles_six_months_ago": 1050,
+      "change_percent": -38.1
+    },
+    "market_assumptions": {
+      "estimated_vehicle_value": 26800,
+      "estimated_upgrade_payment": 585
+    },
+    "nessie_customer_id": "nessie-demo-001"
+  },
+  {
+    "id": "customer-stressed",
+    "name": "Jordan Lee",
+    "scenario_label": "Financially constrained",
+    "description": "Same vehicle context, weaker financial buffer.",
+    "vehicle": {
+      "year": 2023,
+      "make": "Toyota",
+      "model": "RAV4",
+      "mileage": 31000
+    },
+    "contract": {
+      "type": "LEASE",
+      "months_remaining": 2,
+      "monthly_payment": 469.0,
+      "buyout_amount": 24500.0
+    },
+    "usage": {
+      "monthly_miles_current": 650,
+      "monthly_miles_six_months_ago": 1050,
+      "change_percent": -38.1
+    },
+    "market_assumptions": {
+      "estimated_vehicle_value": 26800,
+      "estimated_upgrade_payment": 585
+    },
+    "nessie_customer_id": "nessie-demo-002"
+  }
+]
