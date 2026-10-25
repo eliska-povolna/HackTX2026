@@ -44,7 +44,16 @@ def require_supported_responsibility(
 
 def require_supported_team(team):
     policy = team.policy
-    if policy and (policy.workflow_kind not in {"mobility_decision", "loan_opportunity"} or policy.scope not in {"single_customer", "portfolio"} or (policy.workflow_kind == "loan_opportunity" and policy.scope != "portfolio")):
+    if not policy:
+        return
+    kind = (policy.workflow_kind or "").strip()
+    scope = (policy.scope or "").strip()
+    ok = (
+        (kind == "simple_play" and scope in {"single_customer", "portfolio", ""})
+        or (kind == "mobility_decision" and scope in {"single_customer", "portfolio"})
+        or (kind == "loan_opportunity" and scope == "portfolio")
+    )
+    if not ok:
         raise HTTPException(status_code=400, detail={
             "code": "NEEDS_SETUP", "message": "No installed workflow matches this team configuration.", "recoverable": True,
         })

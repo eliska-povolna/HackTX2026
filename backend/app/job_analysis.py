@@ -20,6 +20,7 @@ class ExecutionStatus(str, Enum):
 class WorkflowKind(str, Enum):
     MOBILITY_DECISION = "mobility_decision"
     LOAN_OPPORTUNITY = "loan_opportunity"
+    SIMPLE_PLAY = "simple_play"
     UNSUPPORTED = "unsupported"
     AMBIGUOUS = "ambiguous"
 
@@ -361,43 +362,40 @@ def analyze_job(
     scope = _detect_scope(goal, answers)
 
     if workflow == WorkflowKind.AMBIGUOUS:
-        # With Toyota context selected, assemble the default single-customer
-        # mobility team instead of blocking the Create form on follow-ups.
+        # With Toyota context selected, prefer the demo mobility pack.
+        # Without it, fall through to a connector-free simple_play team.
         if _toyota_sources_enabled(context_source_ids):
             workflow = WorkflowKind.MOBILITY_DECISION
             scope = JobScope.SINGLE_CUSTOMER
         else:
-            questions = [
-                "Is this a mobility / lease decision, or a vehicle-loan targeting opportunity?",
-            ]
-            if "scope" not in answers:
-                questions.append("Should this evaluate one customer or the full Toyota demo portfolio?")
-            if len(questions) < 3:
-                questions.append("Should financial affordability from Nessie be required?")
-            return JobAnalysis(
-                responsibility=goal,
-                scope=scope,
-                workflow_kind=WorkflowKind.AMBIGUOUS,
-                pack_id=TOYOTA_PACK_ID,
-                follow_up_questions=questions[:4],
-                execution_status=ExecutionStatus.NEED_MORE_INFO,
-                suggested_agent_count=0,
-                notes=["Ambiguous goal — answer follow-ups before assembling agents."],
-            )
+            workflow = WorkflowKind.UNSUPPORTED
 
     if workflow == WorkflowKind.UNSUPPORTED:
+        # No external pack required — allow a tiny Meta-only "simple play" team
+        # (games, brainstorm, roleplay). Recruiting already returned above.
         return JobAnalysis(
             responsibility=goal,
-            workflow_kind=WorkflowKind.UNSUPPORTED,
-            missing_capabilities=[
-                "Toyota mobility decision pack or vehicle-loan targeting pack",
+            scope=JobScope.SINGLE_CUSTOMER,
+            workflow_kind=WorkflowKind.SIMPLE_PLAY,
+            pack_id=None,
+            required_work=["Run one LLM play/response turn with no external connectors"],
+            required_capabilities=["meta_llm"],
+            required_connections=["meta"],
+            work_steps=[
+                WorkStepSpec(
+                    id="simple-play",
+                    kind="AGENT",
+                    action="simple_play",
+                    purpose="Single LLM turn for a connector-free goal",
+                )
             ],
-            follow_up_questions=[
-                "Rephrase as a Toyota mobility / lease decision, or a vehicle-loan shortlist.",
-                "Enable Toyota customer context, then use the sample mobility goal.",
+            missing_capabilities=[],
+            follow_up_questions=[],
+            execution_status=ExecutionStatus.READY,
+            suggested_agent_count=2,
+            notes=[
+                "Simple play: no Toyota/Nessie. One Meta LLM turn; not a full multi-tool workflow.",
             ],
-            execution_status=ExecutionStatus.NEEDS_SETUP,
-            notes=["Goal does not match the installed Toyota Mobility pack."],
         )
 
     if workflow == WorkflowKind.MOBILITY_DECISION:

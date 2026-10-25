@@ -61,6 +61,11 @@ ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
         actions_any=("synthesize", "recommend"),
         integrations=("meta",),
     ),
+    "simple_play": ActionRequirements(
+        tools=("simple_play",),
+        actions_any=("synthesize", "recommend", "read"),
+        integrations=("meta",),
+    ),
     "run_evaluators": ActionRequirements(
         tools=("run_evaluators",),
         actions_any=("read", "synthesize", "recommend"),

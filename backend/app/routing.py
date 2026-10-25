@@ -53,6 +53,11 @@ CAPABILITIES: dict[str, Capability] = {
         reason="Natural-language synthesis required",
         requires_reasoning=True,
     ),
+    "simple_play": Capability(
+        executor=ExecutorType.LLM,
+        reason="Connector-free LLM play / response turn",
+        requires_reasoning=True,
+    ),
     "run_evaluators": Capability(
         executor=ExecutorType.CODE,
         reason="Deterministic implementation available",

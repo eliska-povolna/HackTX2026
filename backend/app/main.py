@@ -413,9 +413,16 @@ async def mobility_trigger_evaluate(
 
 @app.post("/api/runs", response_model=CreateRunResponse, status_code=202)
 async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> CreateRunResponse:
-    # Validate customer exists
+    is_simple_play = bool(
+        request.team.policy and request.team.policy.workflow_kind == "simple_play"
+    )
+    # Validate customer exists (Toyota / portfolio paths only).
     customers = load_toyota_customers()
-    if not (request.team.policy and request.team.policy.scope == "portfolio") and not any(c["id"] == request.context.customer_id for c in customers):
+    if (
+        not is_simple_play
+        and not (request.team.policy and request.team.policy.scope == "portfolio")
+        and not any(c["id"] == request.context.customer_id for c in customers)
+    ):
         raise HTTPException(
             status_code=400,
             detail={
@@ -436,20 +443,35 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
 
     from app.workflow_support import require_supported_responsibility, require_supported_team
 
-    analysis = require_supported_responsibility(
-        request.goal,
-        context_source_ids=list(
-            dict.fromkeys(
-                [*(request.context_source_ids or []), *(request.context.context_source_ids or [])]
-            )
-        ),
-    )
     require_supported_team(request.team)
     policy = request.team.policy
-    if analysis.execution_status.value == "READY" and policy and (
-        policy.workflow_kind != analysis.workflow_kind.value or policy.scope != analysis.scope.value
-    ):
-        raise HTTPException(status_code=400, detail={"code": "NEEDS_SETUP", "message": "The responsibility changed. Assemble a team for the new workflow before running.", "recoverable": True})
+    # Short legacy stubs ("demo") keep the team's declared workflow. Reclassify
+    # only real goals so mobility regressions are not forced into simple_play.
+    goal_key = (request.goal or "").strip().lower()
+    if goal_key not in {"", "demo"}:
+        analysis = require_supported_responsibility(
+            request.goal,
+            context_source_ids=list(
+                dict.fromkeys(
+                    [
+                        *(request.context_source_ids or []),
+                        *(request.context.context_source_ids or []),
+                    ]
+                )
+            ),
+        )
+        if analysis.execution_status.value == "READY" and policy and (
+            policy.workflow_kind != analysis.workflow_kind.value
+            or policy.scope != analysis.scope.value
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "NEEDS_SETUP",
+                    "message": "The responsibility changed. Assemble a team for the new workflow before running.",
+                    "recoverable": True,
+                },
+            )
 
     # Merge top-level + context attachment ids; reject unknown ids.
     att_ids = list(
@@ -484,8 +506,13 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
     request.team = ensure_team_runtime_config(request.team)
     try:
         from app.pack_workflows import build_pack_execution_plan
+        from app.simple_play import align_simple_play_team, build_simple_play_plan
+
         portfolio = request.team.policy and request.team.policy.scope == "portfolio"
-        if portfolio:
+        if is_simple_play:
+            request.team = align_simple_play_team(request.team)
+            plan = build_simple_play_plan(request.team)
+        elif portfolio:
             plan = build_pack_execution_plan(request.team, context_source_ids=source_ids or None)
         else:
             plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None, include_downstream=mobility_relevant(request.context.customer_id))

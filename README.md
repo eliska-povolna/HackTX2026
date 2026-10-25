@@ -156,7 +156,32 @@ Portfolio loan ranking uses the same derived fields; tied scores break on financ
 
 ### Assemble / planning gate
 
-Planning classifies the goal against the **installed Toyota pack** (single-customer mobility, portfolio mobility, loan shortlist). Recruiting and unrelated goals return `NEEDS_SETUP` with missing connectors. With Toyota context sources enabled, the Create-form sample mobility goal assembles a runnable team instead of a dead-end capability error.
+Planning classifies the goal:
+
+| Goal type | Result |
+|---|---|
+| Toyota mobility (one customer or portfolio) | `READY` → mobility workflow |
+| Vehicle-loan shortlist | `READY` → loan portfolio workflow |
+| Connector-free play (games, brainstorm, roleplay) | `READY` → **simple_play** (one Meta LLM turn, no Nessie/Toyota) |
+| Recruiting / email / calendar / missing SaaS | `NEEDS_SETUP` with named missing connectors |
+
+With Toyota context sources enabled, ambiguous customer/vehicle goals prefer the mobility pack. Without those sources, freeform goals fall through to `simple_play` instead of a hard fail.
+
+### What the Create UI does
+
+| Control | Behavior |
+|---|---|
+| **Theme** (Fantasy / Professional / Toyota) | Skins copy and sample goal wording. Runtime still classifies the goal; Toyota demo sample is the supported mobility prompt. |
+| **Goal text** | Sent to `POST /api/teams/plan`. Must be ≥12 characters. |
+| **Work style** | `fast` / `balanced` / `thorough` → `budget_preference` on plan and `TeamPolicy.work_style` on save/run (model tier + reviewer policy). |
+| **Context chips** | Toggle `toyota_customer` / `nessie_banking` / uploads. Affects classification and which tools the run may use. |
+| **Customer** | Demo Toyota profile for single-customer mobility runs (hidden for portfolio / simple_play). |
+| **Build / Assemble** | Plans a team via Meta LLM, then aligns grants for the classified workflow. |
+| **Save Team** | Persists the current team + policy to Tiger (`POST /api/teams`). Does not start a run. |
+| **Run Team** | `POST /api/runs` (202) then polls status. Mobility needs Toyota context; portfolio needs Nessie; **simple_play** runs without Toyota chips. |
+| **Check Trigger** | `POST /api/triggers/mobility/evaluate` with `start_run_if_relevant=false`. Cheap CODE relevance only (lease window / usage swing). Does **not** call Nessie or LLM and does not start a run in the UI. |
+| **Decision Trace / Quest Log** | Per-run audit events (route, permissions, model, LLM). Scrollable panel on Create. Full history is on Activity. |
+| **Configure agent** | Edits tools, scopes, actions, budgets, instructions. Runtime enforces them; missing grants → `PERMISSION_DENIED`, never silent repair. |
 
 ---
 

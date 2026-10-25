@@ -344,7 +344,13 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
     request.team = ensure_team_runtime_config(request.team)
     source_ids = _merged_context_source_ids(request)
     from app.pack_workflows import build_pack_execution_plan
-    if request.team.policy and request.team.policy.scope == "portfolio":
+    from app.simple_play import align_simple_play_team, build_simple_play_plan
+
+    policy_preview = _team_policy(request.team)
+    if (policy_preview.workflow_kind or "") == "simple_play":
+        request.team = align_simple_play_team(request.team)
+        plan = build_simple_play_plan(request.team)
+    elif request.team.policy and request.team.policy.scope == "portfolio":
         plan = build_pack_execution_plan(request.team, context_source_ids=source_ids or None)
     else:
         plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None, include_downstream=mobility_relevant(request.context.customer_id))
@@ -505,6 +511,22 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
             for evaluator in get_run(run_id).evaluators:
                 _audit(run_id,agent_id=None,event_type="EVALUATOR_RESULT",executor_type=ExecutorType.CODE,result=evaluator.status.value,message=evaluator.details)
             _audit(run_id,agent_id=None,event_type="RUN_COMPLETED",result=get_run(run_id).status.value,message="Portfolio workflow evaluated; no offers or financial transactions submitted.")
+            return
+
+        if (policy.workflow_kind or "") == "simple_play":
+            def _finalize_simple(r) -> None:
+                r.status = RunStatus.COMPLETED if ctx["budget_ok"] else RunStatus.BUDGET_LIMIT
+                r.metrics = type(r.metrics).model_validate(costs.metrics_dict())
+                r.evaluators = []
+
+            update_run(run_id, _finalize_simple)
+            _audit(
+                run_id,
+                agent_id=None,
+                event_type="RUN_COMPLETED",
+                result=get_run(run_id).status.value,
+                message="Simple play completed (Meta LLM only; no external connectors).",
+            )
             return
 
         update_run(
@@ -991,6 +1013,16 @@ async def _run_llm(
         from app.portfolio import explain_portfolio
         return await explain_portfolio(task,agent,ctx,run_id,costs,request)
 
+    if task.action == "simple_play":
+        return await _llm_simple_play(
+            run_id=run_id,
+            task=task,
+            agent=agent,
+            costs=costs,
+            request=request,
+            ctx=ctx,
+        )
+
     if task.action != "synthesize_recommendation":
         raise RuntimeError(f"Unsupported LLM action: {task.action}")
 
@@ -1210,6 +1242,123 @@ async def _run_llm(
         else "Generated deterministic recommendation (dev/test path)."
     )
     return summary, cost, True
+
+
+async def _llm_simple_play(
+    *,
+    run_id: str,
+    task: TaskDefinition,
+    agent: AgentDefinition,
+    costs: RunCostTracker,
+    request: CreateRunRequest,
+    ctx: dict[str, Any],
+) -> tuple[str, float, bool]:
+    """One Meta LLM turn for connector-free goals (games, brainstorm, roleplay)."""
+    from app.prompts import build_agent_system_prompt
+    from app.runtime_mode import llm_deterministic_synthesis_allowed
+    from app.services.llm_service import LLMUnavailableError
+
+    policy: TeamPolicy = ctx.get("team_policy") or TeamPolicy()
+    work_style = ctx.get("work_style") or normalize_work_style(policy.work_style)
+    estimated_cost = 0.004
+    if not costs.can_afford_llm(estimated_cost, agent=agent):
+        raise BudgetLimitError("BUDGET_LIMIT: cannot afford simple_play LLM turn")
+
+    try:
+        model_decision = choose_model(
+            task_kind="synthesis",
+            work_style=work_style,
+            risk="low",
+        )
+    except ModelRoutingError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    _audit(
+        run_id,
+        agent_id=agent.id,
+        event_type="MODEL_DECISION",
+        executor_type=ExecutorType.LLM,
+        resource="simple_play",
+        result=model_decision.tier,
+        message=f"tier={model_decision.tier} model={model_decision.model}. Reason: {model_decision.reason}",
+    )
+
+    llm = get_llm_service()
+    text = ""
+    used_real = False
+    cost = 0.0
+    if llm.is_configured():
+        assert_integration_allowed(agent, "meta")
+        system = build_agent_system_prompt(
+            agent,
+            policy,
+            task_instruction=(
+                "Complete the user's goal in one short turn. Stay in character. "
+                "No tools, no external APIs, no inventing bank/vehicle data."
+            ),
+        )
+        payload = {
+            "model": model_decision.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": request.goal},
+            ],
+            "temperature": 0.7,
+            "max_tokens": 600,
+        }
+        try:
+            raw = await llm._post_chat_completion(
+                headers={"Authorization": f"Bearer {llm.meta_api_key}"},
+                payload=payload,
+            )
+            text = (
+                ((raw.get("choices") or [{}])[0].get("message") or {}).get("content")
+                or ""
+            ).strip()
+            used_real = True
+            cost = estimated_cost
+            costs.record_llm(cost_usd=cost, agent_id=agent.id, model_tier=model_decision.tier)
+        except Exception as exc:
+            if not llm_deterministic_synthesis_allowed():
+                raise LLMUnavailableError(str(exc)) from exc
+            text = (
+                f"[dev fallback] {agent.name} acknowledges the goal "
+                f"“{request.goal[:120]}” and plays a fair round."
+            )
+    else:
+        if not llm_deterministic_synthesis_allowed():
+            raise LLMUnavailableError("No LLM provider configured")
+        text = (
+            f"[dev fallback] {agent.name} acknowledges the goal "
+            f"“{request.goal[:120]}” and plays a fair round."
+        )
+
+    if used_real:
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="LLM_CALL",
+            executor_type=ExecutorType.LLM,
+            resource="simple_play",
+            result="ALLOWED",
+            message=f"Simple play turn via live LLM ({model_decision.tier}).",
+            cost_usd=cost,
+        )
+    append_output(
+        run_id,
+        OutputItem(
+            id=f"out-{uuid4().hex[:8]}",
+            title="Simple play result",
+            agent_id=agent.id,
+            type="PLAY",
+            summary=(text[:160] + ("…" if len(text) > 160 else "")),
+            content=text,
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            cost_usd=cost,
+            source_type="LLM" if used_real else "CODE",
+        ),
+    )
+    return "Completed connector-free LLM play turn.", cost, True
 
 
 async def _llm_synthesize(

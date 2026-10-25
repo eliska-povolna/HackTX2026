@@ -36,6 +36,7 @@ AVAILABLE_TOOLS = [
     "run_evaluators",
     "review_recommendation",
     "load_toyota_portfolio", "filter_mobility_portfolio", "build_portfolio_financials", "rank_customers", "explain_shortlist",
+    "simple_play",
 ]
 
 DEFAULT_TEAM_GUARDRAILS = [
@@ -294,7 +295,12 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
         )
 
         source_ids = list(request.context_source_ids or [])
-        if analysis.scope.value == "portfolio":
+        if analysis.workflow_kind.value == "simple_play":
+            from app.simple_play import align_simple_play_team, build_simple_play_plan
+
+            team = align_simple_play_team(team)
+            build_simple_play_plan(team)
+        elif analysis.scope.value == "portfolio":
             from app.portfolio import align_portfolio_team
             from app.pack_workflows import build_pack_execution_plan
             team = align_portfolio_team(team, analysis.workflow_kind.value)
