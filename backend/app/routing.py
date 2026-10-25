@@ -58,6 +58,11 @@ CAPABILITIES: dict[str, Capability] = {
         reason="Deterministic implementation available",
         deterministic=True,
     ),
+    "review_recommendation": Capability(
+        executor=ExecutorType.LLM,
+        reason="Natural-language synthesis required",
+        requires_reasoning=True,
+    ),
 }
 
 

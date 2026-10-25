@@ -49,7 +49,20 @@ class LLMService:
             return bool(self.meta_api_key and (self.fast_model or self.strong_model))
         return False
 
+    def resolve_model(self, tier: str) -> str:
+        """Return configured model name for FAST or STRONG. Raises if missing."""
+        if tier.upper() == "FAST":
+            if not self.fast_model:
+                raise LLMUnavailableError("LLM_FAST_MODEL is not configured")
+            return self.fast_model
+        if tier.upper() == "STRONG":
+            if not self.strong_model:
+                raise LLMUnavailableError("LLM_STRONG_MODEL is not configured")
+            return self.strong_model
+        raise LLMUnavailableError(f"Unknown model tier: {tier}")
+
     def _model_for_planning(self) -> str:
+        """Legacy helper — prefer ModelRouter.choose_model for new call sites."""
         return self.strong_model or self.fast_model
 
     async def plan_team(
@@ -59,6 +72,7 @@ class LLMService:
         budget_preference: str,
         available_tools: list[str],
         attachments: Optional[list[dict]] = None,
+        work_style: str = "balanced",
     ) -> TeamDefinition:
         if not self.is_configured():
             raise LLMUnavailableError("No LLM provider configured")
@@ -70,6 +84,7 @@ class LLMService:
                 budget_preference=budget_preference,
                 available_tools=available_tools,
                 attachments=attachments or [],
+                work_style=work_style,
             )
 
         raise LLMUnavailableError(f"Unsupported LLM provider: {self.provider}")
@@ -81,17 +96,26 @@ class LLMService:
         budget_preference: str,
         available_tools: list[str],
         attachments: list[dict],
+        work_style: str = "balanced",
     ) -> TeamDefinition:
-        model = self._model_for_planning()
+        from app.model_router import ModelRoutingError, choose_model
+
+        try:
+            decision = choose_model(task_kind="planning", work_style=work_style)
+        except ModelRoutingError as exc:
+            raise LLMUnavailableError(str(exc)) from exc
+        model = decision.model
         system = (
             "You are QuestMaster's team planner. Return ONLY a single JSON object "
             "(no markdown, no commentary) for a TeamDefinition with keys: "
-            "id, team_name, summary, agents. "
+            "id, team_name, summary, agents, optional policy "
+            "{max_llm_calls, max_llm_cost_usd, work_style, guardrails}. "
             "Each agent MUST include: id, name, role, purpose, skills (array), "
             "allowed_tools (array), permissions object with data_scopes and actions "
             "arrays, budget object with max_llm_cost_usd (number) and max_llm_calls "
             "(integer). Optional: instructions, guardrails, model_policy, "
-            "estimated_cost_usd. "
+            "estimated_cost_usd, allowed_integrations (named refs like nessie/meta — "
+            "never include secret values). "
             f"Return at most {max_team_size} agents. "
             "Prefer tools from available_tools when relevant. "
             "If attachments are provided, tailor the team to use that context."
@@ -264,10 +288,22 @@ def _coerce_team_dict(raw: dict, *, max_team_size: int) -> dict:
             a["estimated_cost_usd"] = float(a.get("estimated_cost_usd") or 0.0)
         except (TypeError, ValueError):
             a["estimated_cost_usd"] = 0.0
+        if not isinstance(a.get("allowed_integrations"), list):
+            a["allowed_integrations"] = []
         fixed_agents.append(a)
     if not fixed_agents:
         raise ValueError("LLM team contained no valid agents")
     data["agents"] = fixed_agents
+    policy = data.get("policy")
+    if policy is not None and not isinstance(policy, dict):
+        data.pop("policy", None)
+    elif isinstance(policy, dict):
+        policy.setdefault("work_style", "balanced")
+        policy.setdefault("max_llm_calls", 6)
+        policy.setdefault("max_llm_cost_usd", 0.20)
+        if not isinstance(policy.get("guardrails"), list):
+            policy["guardrails"] = []
+        data["policy"] = policy
     return data
 
 

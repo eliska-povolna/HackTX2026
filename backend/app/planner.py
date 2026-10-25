@@ -1,10 +1,11 @@
-"""Team planner: LLM when available, otherwise deterministic fallback."""
+"""Team planner: LLM when available; deterministic Toyota fallback for demos/tests."""
 
 from __future__ import annotations
 
 import logging
 import uuid
 
+from app.model_router import normalize_work_style
 from app.models import (
     AgentDefinition,
     AgentPermissions,
@@ -13,6 +14,7 @@ from app.models import (
     PlanTeamResponse,
     PlannerSource,
     TeamDefinition,
+    TeamPolicy,
 )
 from app.services.llm_service import LLMUnavailableError, get_llm_service
 
@@ -30,11 +32,33 @@ AVAILABLE_TOOLS = [
     "score_mobility_options",
     "synthesize_recommendation",
     "run_evaluators",
+    "review_recommendation",
+]
+
+DEFAULT_TEAM_GUARDRAILS = [
+    "Never expose raw customer financial data outside the financial boundary.",
+    "Never include API keys or secrets in outputs.",
 ]
 
 
-def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
-    """Deterministic Toyota mobility team used when LLM is unavailable."""
+def work_style_from_budget_preference(preference: str) -> str:
+    raw = (preference or "balanced").strip().lower()
+    mapping = {
+        "fast": "fast",
+        "cheap": "fast",
+        "economy": "fast",
+        "balanced": "balanced",
+        "default": "balanced",
+        "thorough": "thorough",
+        "quality": "thorough",
+        "strict": "thorough",
+    }
+    return normalize_work_style(mapping.get(raw, "balanced"))
+
+
+def build_fallback_team(goal: str, max_team_size: int, work_style: str = "balanced") -> TeamDefinition:
+    """Deterministic Toyota mobility team used for demos/tests and trigger runs."""
+    style = normalize_work_style(work_style)
     agents = [
         AgentDefinition(
             id="context-agent",
@@ -60,6 +84,7 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
             model_policy="auto",
             budget=BudgetPolicy(max_llm_cost_usd=0.02, max_llm_calls=1),
             estimated_cost_usd=0.002,
+            allowed_integrations=[],
         ),
         AgentDefinition(
             id="financial-agent",
@@ -87,6 +112,7 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
             model_policy="auto",
             budget=BudgetPolicy(max_llm_cost_usd=0.05, max_llm_calls=1),
             estimated_cost_usd=0.005,
+            allowed_integrations=["nessie"],
         ),
         AgentDefinition(
             id="vehicle-agent",
@@ -113,6 +139,7 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
             model_policy="auto",
             budget=BudgetPolicy(max_llm_cost_usd=0.03, max_llm_calls=1),
             estimated_cost_usd=0.004,
+            allowed_integrations=[],
         ),
         AgentDefinition(
             id="decision-agent",
@@ -121,7 +148,11 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
             purpose="Combine approved derived outputs and produce a clear mobility recommendation.",
             skills=["recommendation", "tradeoff_synthesis", "customer_guidance"],
             instructions="Use financial_summary and vehicle/mobility summaries only. Never request raw banking rows.",
-            allowed_tools=["score_mobility_options", "synthesize_recommendation"],
+            allowed_tools=[
+                "score_mobility_options",
+                "synthesize_recommendation",
+                "run_evaluators",
+            ],
             permissions=AgentPermissions(
                 data_scopes=["financial_summary", "vehicle_data", "usage_data", "lease_data"],
                 actions=["read", "synthesize", "recommend"],
@@ -133,15 +164,19 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
             model_policy="auto",
             budget=BudgetPolicy(max_llm_cost_usd=0.05, max_llm_calls=2),
             estimated_cost_usd=0.01,
+            allowed_integrations=["meta"],
         ),
         AgentDefinition(
             id="reviewer-agent",
             name="Quinn",
             role="Reviewer",
-            purpose="Optional high-risk or strict-mode review of the recommendation.",
+            purpose="Optional thorough/high-risk review of the recommendation against guardrails.",
             skills=["policy_review", "risk_check", "budget_compliance"],
-            instructions="Run only for strict quality mode or high-risk external actions. Skip on normal demo runs.",
-            allowed_tools=[],
+            instructions=(
+                "Review only approved FinancialContext and the proposed recommendation. "
+                "Never request raw Nessie rows. Return PASS or FAIL with issues."
+            ),
+            allowed_tools=["review_recommendation"],
             permissions=AgentPermissions(
                 data_scopes=["financial_summary"],
                 actions=["read", "synthesize"],
@@ -153,6 +188,7 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
             model_policy="auto",
             budget=BudgetPolicy(max_llm_cost_usd=0.02, max_llm_calls=1),
             estimated_cost_usd=0.0,
+            allowed_integrations=["meta"],
         ),
     ]
 
@@ -167,6 +203,12 @@ def build_fallback_team(goal: str, max_team_size: int) -> TeamDefinition:
         team_name="Toyota Mobility Decision Team",
         summary=summary,
         agents=trimmed,
+        policy=TeamPolicy(
+            max_llm_calls=6,
+            max_llm_cost_usd=0.20,
+            work_style=style,
+            guardrails=list(DEFAULT_TEAM_GUARDRAILS),
+        ),
     )
 
 
@@ -188,6 +230,7 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             },
         )
 
+    work_style = work_style_from_budget_preference(request.budget_preference)
     llm = get_llm_service()
     try:
         team = await llm.plan_team(
@@ -196,9 +239,17 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             budget_preference=request.budget_preference,
             available_tools=AVAILABLE_TOOLS,
             attachments=attachment_ctx,
+            work_style=work_style,
         )
         if len(team.agents) > request.max_team_size:
             team.agents = team.agents[: request.max_team_size]
+        if team.policy is None:
+            team.policy = TeamPolicy(
+                work_style=work_style,
+                guardrails=list(DEFAULT_TEAM_GUARDRAILS),
+            )
+        elif not team.policy.work_style:
+            team.policy.work_style = work_style
         return PlanTeamResponse(
             team=team,
             planner_source=PlannerSource.LLM,

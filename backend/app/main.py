@@ -478,6 +478,20 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
             ) from exc
         raise
 
+    from app.permissions import validate_plan_permissions
+
+    agents = {a.id: a for a in request.team.agents}
+    perm_err = validate_plan_permissions(agents, plan.tasks)
+    if perm_err is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "PERMISSION_DENIED",
+                "message": perm_err.message,
+                "recoverable": True,
+            },
+        )
+
     run = create_run_record(request, plan)
     background.add_task(execute_run, run.run_id, request)
     return CreateRunResponse(run_id=run.run_id, status=RunStatus.PLANNING)

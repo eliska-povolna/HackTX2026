@@ -100,6 +100,17 @@ class AgentDefinition(BaseModel):
     guardrails: list[str] = Field(default_factory=list)
     model_policy: str = "auto"
     estimated_cost_usd: float = 0.0
+    # Named integration grants only (e.g. "nessie", "meta"). Secret values never stored here.
+    allowed_integrations: list[str] = Field(default_factory=list)
+
+
+class TeamPolicy(BaseModel):
+    """Optional team-level ceiling and work style. Agents may be stricter."""
+
+    max_llm_calls: int = 6
+    max_llm_cost_usd: float = 0.20
+    work_style: str = "balanced"  # fast | balanced | thorough
+    guardrails: list[str] = Field(default_factory=list)
 
 
 class TeamDefinition(BaseModel):
@@ -107,6 +118,7 @@ class TeamDefinition(BaseModel):
     team_name: str
     summary: str
     agents: list[AgentDefinition]
+    policy: Optional[TeamPolicy] = None
 
 
 class TaskDefinition(BaseModel):
@@ -424,6 +436,9 @@ class RunMetrics(BaseModel):
     routing_decisions: int = 0
     agent_llm_calls: dict[str, int] = Field(default_factory=dict)
     agent_llm_cost: dict[str, float] = Field(default_factory=dict)
+    work_style: str = "balanced"
+    last_model_tier: Optional[str] = None
+    model_tiers_used: list[str] = Field(default_factory=list)
 
 
 class ContextSourceItem(BaseModel):

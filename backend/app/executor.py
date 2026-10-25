@@ -16,6 +16,7 @@ from app.context_sources import (
 )
 from app.cost_optimizer import RunCostTracker
 from app.evaluators import recommendation_contains_raw_nessie, run_evaluators
+from app.model_router import ModelRoutingError, choose_model, normalize_work_style
 from app.models import (
     AgentDefinition,
     AuditEvent,
@@ -33,14 +34,19 @@ from app.models import (
     TaskDefinition,
     TaskStatus,
     TeamDefinition,
+    TeamPolicy,
     ToyotaRecommendation,
 )
 from app.permissions import (
     PermissionDenied,
+    assert_integration_allowed,
     assert_tool_allowed,
     check_tool_allowed,
     decision_agent_blocked_from_raw_nessie,
+    validate_plan_permissions,
+    validate_task_permissions,
 )
+from app.prompts import build_agent_system_prompt
 from app.routing import RouteDecision, RoutingError, route
 from app.run_store import append_audit, append_output, get_run, record_task_event, update_run
 from app.services.llm_service import LLMUnavailableError, get_llm_service
@@ -91,10 +97,30 @@ def build_toyota_execution_plan(
         )
 
     agents = {a.id: a for a in team.agents}
-    context_id = _pick_agent(agents, ["context-agent"], "context")
-    financial_id = _pick_agent(agents, ["financial-agent"], "financial")
-    vehicle_id = _pick_agent(agents, ["vehicle-agent"], "vehicle")
-    decision_id = _pick_agent(agents, ["decision-agent"], "decision")
+    context_id = _pick_agent(
+        agents,
+        ["context-agent"],
+        "context",
+        skills=["customer_context", "signal_detection", "data_scoping"],
+    )
+    financial_id = _pick_agent(
+        agents,
+        ["financial-agent"],
+        "financial",
+        skills=["cashflow_analysis", "financial_context", "affordability"],
+    )
+    vehicle_id = _pick_agent(
+        agents,
+        ["vehicle-agent"],
+        "vehicle",
+        skills=["vehicle_fit", "mobility_options", "usage_analysis"],
+    )
+    decision_id = _pick_agent(
+        agents,
+        ["decision-agent"],
+        "decision",
+        skills=["recommendation", "tradeoff_synthesis", "customer_guidance"],
+    )
 
     tasks: list[TaskDefinition] = [
         _task(
@@ -172,14 +198,41 @@ def build_toyota_execution_plan(
     return ExecutionPlan(tasks=tasks)
 
 
-def _pick_agent(agents: dict[str, AgentDefinition], preferred: list[str], hint: str) -> str:
+def _pick_agent(
+    agents: dict[str, AgentDefinition],
+    preferred: list[str],
+    hint: str,
+    skills: Optional[list[str]] = None,
+) -> str:
+    """Prefer explicit ids, then role/id hint, then skill overlap. Skills never grant permissions."""
     for pid in preferred:
         if pid in agents:
             return pid
     for aid, agent in agents.items():
         if hint in aid or hint in agent.role.lower():
             return aid
+    if skills:
+        best_id = None
+        best_score = 0
+        wanted = {s.lower() for s in skills}
+        for aid, agent in agents.items():
+            have = {s.lower() for s in (agent.skills or [])}
+            score = len(wanted & have)
+            if score > best_score:
+                best_score = score
+                best_id = aid
+        if best_id and best_score > 0:
+            return best_id
     return next(iter(agents)) if agents else "unknown-agent"
+
+
+def _team_policy(team: TeamDefinition) -> TeamPolicy:
+    return team.policy or TeamPolicy()
+
+
+def _agents_by_id(team: TeamDefinition) -> dict[str, AgentDefinition]:
+    """Shallow index — never mutate permissions to make a task succeed."""
+    return {a.id: a for a in team.agents}
 
 
 def _audit(
@@ -208,31 +261,6 @@ def _audit(
             cost_usd=cost_usd,
         ),
     )
-
-
-def _ensure_plan_tools(team: TeamDefinition, plan: ExecutionPlan) -> dict[str, AgentDefinition]:
-    """Ensure agents may use tools required by their assigned plan tasks."""
-    agents = {a.id: a.model_copy(deep=True) for a in team.agents}
-    for task in plan.tasks:
-        agent = agents.get(task.assigned_agent_id)
-        if agent is None:
-            continue
-        needed = task.action
-        if needed not in agent.allowed_tools:
-            agent.allowed_tools = list(agent.allowed_tools) + [needed]
-        if task.action == "evaluate_mobility_relevance":
-            if "evaluate_mobility_relevance" not in agent.allowed_tools:
-                agent.allowed_tools = list(agent.allowed_tools) + ["evaluate_mobility_relevance"]
-        if task.action == "nessie_load_customer_financials":
-            for t in ("nessie_accounts", "nessie_purchases"):
-                if t not in agent.allowed_tools:
-                    agent.allowed_tools.append(t)
-            if "nessie_raw_financial" not in agent.permissions.data_scopes:
-                agent.permissions.data_scopes = list(agent.permissions.data_scopes) + [
-                    "nessie_raw_financial",
-                    "financial_summary",
-                ]
-    return agents
 
 
 def _merged_context_source_ids(request: CreateRunRequest) -> list[str]:
@@ -306,8 +334,34 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
     """Background execution for one run."""
     source_ids = _merged_context_source_ids(request)
     plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None)
-    agents = _ensure_plan_tools(request.team, plan)
-    costs = RunCostTracker()
+    agents = _agents_by_id(request.team)
+    policy = _team_policy(request.team)
+    work_style = normalize_work_style(policy.work_style)
+
+    perm_err = validate_plan_permissions(agents, plan.tasks)
+    if perm_err is not None:
+        update_run(
+            run_id,
+            lambda r: setattr(r, "status", RunStatus.FAILED),
+        )
+        _audit(
+            run_id,
+            agent_id=perm_err.agent_id,
+            event_type="PERMISSION_CHECK",
+            resource=perm_err.tool_name,
+            result="DENIED",
+            message=perm_err.message,
+        )
+        _audit(
+            run_id,
+            agent_id=None,
+            event_type="RUN_COMPLETED",
+            result="FAILED",
+            message=f"Plan permission validation failed: {perm_err.message}",
+        )
+        return
+
+    costs = RunCostTracker.from_team_policy(policy)
     ctx: dict[str, Any] = {
         "toyota": None,
         "nessie_raw": None,  # stays inside financial boundary
@@ -321,12 +375,23 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
         "permission_denials": 0,
         "tool_failures": 0,
         "budget_ok": True,
+        "review_status": None,
+        "team_policy": policy,
+        "work_style": work_style,
     }
     nessie = get_nessie_client()
     nessie.clear_run_cache()
 
     update_run(run_id, lambda r: setattr(r, "status", RunStatus.RUNNING))
-    _audit(run_id, agent_id=None, event_type="RUN_CREATED", message="Run execution started.")
+    _audit(
+        run_id,
+        agent_id=None,
+        event_type="RUN_CREATED",
+        message=(
+            f"Run execution started. work_style={work_style}; "
+            f"team_budget calls≤{policy.max_llm_calls} cost≤{policy.max_llm_cost_usd}."
+        ),
+    )
     _emit_route_decisions(run_id, plan, agents, costs)
 
     # Security demo: decision agent denied raw Nessie
@@ -417,15 +482,63 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
             ),
         )
 
-        # Skip reviewer unless strict / high risk (optional LLM task)
-        if not costs.should_run_reviewer(request.quality_mode.value, False):
+        reviewer = next(
+            (a for a in request.team.agents if "reviewer" in a.id or "review" in a.role.lower()),
+            None,
+        )
+        high_risk = any(t.risk_level == RiskLevel.high for t in plan.tasks)
+        run_review = costs.should_run_reviewer(
+            work_style=work_style,
+            quality_mode=request.quality_mode.value,
+            high_risk=high_risk,
+            has_reviewer=reviewer is not None,
+        )
+        if run_review and reviewer is not None:
+            await _run_reviewer(
+                run_id=run_id,
+                agent=reviewer,
+                ctx=ctx,
+                costs=costs,
+                request=request,
+                policy=policy,
+            )
+            if ctx.get("review_status") == "FAIL":
+                def _finalize_fail(r) -> None:
+                    r.status = RunStatus.FAILED
+                    r.financial_context = ctx["financial"]
+                    r.recommendation = ctx["recommendation"]
+                    r.metrics = type(r.metrics).model_validate(costs.metrics_dict())
+                    r.evaluators = run_evaluators(
+                        financial=ctx["financial"],
+                        recommendation=ctx["recommendation"],
+                        permission_denials=ctx["permission_denials"],
+                        permission_allows=ctx["permission_allows"],
+                        budget_ok=ctx["budget_ok"],
+                        tool_failures=ctx["tool_failures"],
+                        raw_nessie_in_recommendation=recommendation_contains_raw_nessie(
+                            ctx["recommendation"].model_dump() if ctx["recommendation"] else {}
+                        ),
+                    )
+
+                update_run(run_id, _finalize_fail)
+                _audit(
+                    run_id,
+                    agent_id=reviewer.id,
+                    event_type="RUN_COMPLETED",
+                    result="FAILED",
+                    message="Reviewer returned FAIL — run not marked successful.",
+                )
+                return
+        else:
             _audit(
                 run_id,
-                agent_id="reviewer-agent",
+                agent_id=(reviewer.id if reviewer else "reviewer-agent"),
                 event_type="TASK_COMPLETED",
                 message=(
                     "Reviewer skipped — Reason: normal-risk run; "
                     "additional LLM review not required"
+                    if work_style != "thorough"
+                    else "Reviewer skipped — Reason: no Reviewer agent on team"
                 ),
                 result="SKIPPED",
             )
@@ -485,19 +598,12 @@ async def _execute_task(
     costs: RunCostTracker,
     ctx: dict[str, Any],
 ) -> None:
-    from app.models import AgentPermissions, BudgetPolicy
-
     agent = agents.get(task.assigned_agent_id)
     if agent is None:
-        agent = AgentDefinition(
-            id=task.assigned_agent_id,
-            name=task.assigned_agent_id,
-            role="Agent",
-            purpose="",
-            skills=[],
-            allowed_tools=[task.action],
-            permissions=AgentPermissions(data_scopes=["financial_summary"], actions=["read"]),
-            budget=BudgetPolicy(max_llm_cost_usd=0.05, max_llm_calls=2),
+        raise PermissionDenied(
+            task.assigned_agent_id,
+            task.action,
+            f"Assigned agent '{task.assigned_agent_id}' not found on team.",
         )
 
     def _start(r) -> None:
@@ -524,12 +630,33 @@ async def _execute_task(
     activity = ""
 
     try:
+        # Enforce configured permissions — never broaden them at runtime.
+        require_integ = task.executor in (ExecutorType.TOOL, ExecutorType.LLM) and task.action in {
+            "nessie_load_customer_financials",
+            "synthesize_recommendation",
+            "review_recommendation",
+        }
+        validate_task_permissions(
+            agent,
+            task,
+            require_integrations=require_integ,
+        )
+        ctx["permission_allows"] += 1
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="PERMISSION_CHECK",
+            executor_type=task.executor,
+            resource=task.action,
+            result="ALLOWED",
+            message=f"{agent.name} is authorized for '{task.action}'.",
+        )
+
         if task.executor == ExecutorType.TOOL:
             tool_name, data_source, activity = await _run_tool(
                 task, agent, request, ctx, run_id
             )
             costs.record_tool()
-            ctx["permission_allows"] += 1
         elif task.executor == ExecutorType.CODE:
             activity = await _run_code(task, agent, ctx, run_id, costs)
             data_source = DataSource.LOCAL_CODE.value
@@ -608,15 +735,6 @@ async def _run_tool(
 ) -> tuple[str, str, str]:
     tool = task.action
     assert_tool_allowed(agent, tool)
-    _audit(
-        run_id,
-        agent_id=agent.id,
-        event_type="PERMISSION_CHECK",
-        executor_type=ExecutorType.TOOL,
-        resource=tool,
-        result="ALLOWED",
-        message=f"{agent.name} may use {tool}.",
-    )
 
     if tool == "load_toyota_customer":
         toyota = load_toyota_customer(request.context.customer_id)
@@ -633,6 +751,7 @@ async def _run_tool(
         return tool, DataSource.TOYOTA_SYNTHETIC.value, "Loaded Toyota customer context."
 
     if tool == "nessie_load_customer_financials":
+        assert_integration_allowed(agent, "nessie")
         nessie_id = (ctx.get("toyota") or {}).get("nessie_customer_id")
         if not nessie_id:
             raise RuntimeError("Toyota customer missing nessie_customer_id")
@@ -658,7 +777,10 @@ async def _run_tool(
             executor_type=ExecutorType.TOOL,
             resource="nessie_accounts",
             result="ALLOWED",
-            message=f"Retrieved financial data ({source.value}).",
+            message=(
+                f"Retrieved financial data ({source.value}) via named integration 'nessie' "
+                "(API key stayed server-side)."
+            ),
         )
         return "nessie_accounts", source.value, f"Retrieved financial data from {source.value}."
 
@@ -799,6 +921,9 @@ async def _run_llm(
     scored = ctx["scored"]
     seed = scored["recommendation_seed"]
     raw_blocked = ctx.get("nessie_raw") is not None
+    policy: TeamPolicy = ctx.get("team_policy") or TeamPolicy()
+    work_style = ctx.get("work_style") or normalize_work_style(policy.work_style)
+
     _audit(
         run_id,
         agent_id=agent.id,
@@ -819,13 +944,45 @@ async def _run_llm(
             resource="synthesize_recommendation",
             result="DENIED",
             message=(
-                "LLM synthesis blocked by run budget and/or assigned agent budget "
+                "LLM synthesis blocked by server/team/agent budget "
                 f"(agent max_llm_calls={agent.budget.max_llm_calls}, "
-                f"max_llm_cost_usd={agent.budget.max_llm_cost_usd})."
+                f"max_llm_cost_usd={agent.budget.max_llm_cost_usd}; "
+                f"team max_llm_calls={policy.max_llm_calls})."
             ),
             cost_usd=0.0,
         )
         raise RuntimeError("BUDGET_LIMIT: cannot afford LLM synthesis")
+
+    try:
+        model_decision = choose_model(
+            task_kind="synthesis",
+            work_style=work_style,
+            risk=task.risk_level.value if hasattr(task, "risk_level") else "medium",
+        )
+    except ModelRoutingError as exc:
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="MODEL_DECISION",
+            executor_type=ExecutorType.LLM,
+            resource="synthesize_recommendation",
+            result="FAILED",
+            message=str(exc),
+        )
+        raise RuntimeError(str(exc)) from exc
+
+    _audit(
+        run_id,
+        agent_id=agent.id,
+        event_type="MODEL_DECISION",
+        executor_type=ExecutorType.LLM,
+        resource="synthesize_recommendation",
+        result=model_decision.tier,
+        message=(
+            f"tier={model_decision.tier} model={model_decision.model}. "
+            f"Reason: {model_decision.reason}"
+        ),
+    )
 
     llm = get_llm_service()
     allow_deterministic = llm_deterministic_synthesis_allowed()
@@ -834,11 +991,21 @@ async def _run_llm(
     cost = 0.0
 
     if llm.is_configured():
+        assert_integration_allowed(agent, "meta")
         try:
-            recommendation = await _llm_synthesize(financial, seed, request.goal)
+            recommendation = await _llm_synthesize(
+                agent=agent,
+                policy=policy,
+                financial=financial,
+                seed=seed,
+                goal=request.goal,
+                model_name=model_decision.model,
+            )
             used_real_llm = True
             cost = estimated_cost
-            costs.record_llm(cost_usd=cost, agent_id=agent.id)
+            costs.record_llm(
+                cost_usd=cost, agent_id=agent.id, model_tier=model_decision.tier
+            )
         except (LLMUnavailableError, Exception) as exc:
             _audit(
                 run_id,
@@ -924,7 +1091,10 @@ async def _run_llm(
             executor_type=ExecutorType.LLM,
             resource="synthesize_recommendation",
             result="ALLOWED",
-            message="Generated customer-facing mobility recommendation via live LLM.",
+            message=(
+                f"Generated customer-facing mobility recommendation via live LLM "
+                f"({model_decision.tier})."
+            ),
             cost_usd=cost,
         )
     append_output(
@@ -955,20 +1125,31 @@ async def _run_llm(
 
 
 async def _llm_synthesize(
+    *,
+    agent: AgentDefinition,
+    policy: TeamPolicy,
     financial: FinancialContext,
     seed: dict[str, Any],
     goal: str,
+    model_name: str,
 ) -> ToyotaRecommendation:
     """Ask LLM to polish the deterministic recommendation — never send raw Nessie."""
     llm = get_llm_service()
     if not llm.is_configured():
         raise LLMUnavailableError("No LLM provider configured")
-    system = (
-        "You polish a Toyota mobility recommendation. Return ONLY JSON matching keys: "
-        "recommended_action, confidence, headline, summary, reasons, assumptions, "
-        "next_step {label, action_type}, options. Do not invent raw bank transactions. "
-        "Keep recommended_action aligned with the seed unless the financial context clearly "
-        "requires a different safe mobility choice."
+    system = build_agent_system_prompt(
+        agent,
+        policy,
+        task_instruction=(
+            "Synthesize the customer-facing mobility recommendation from the supplied "
+            "approved FinancialContext and deterministic seed. Do not invent raw bank "
+            "transactions. Keep recommended_action aligned with the seed unless the "
+            "financial context clearly requires a different safe mobility choice."
+        ),
+        response_format=(
+            "Return ONLY JSON with keys: recommended_action, confidence, headline, "
+            "summary, reasons, assumptions, next_step {label, action_type}, options."
+        ),
     )
     user = json.dumps(
         {
@@ -982,7 +1163,7 @@ async def _llm_synthesize(
         "Content-Type": "application/json",
     }
     payload = {
-        "model": llm._model_for_planning(),
+        "model": model_name,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -1001,3 +1182,233 @@ async def _llm_synthesize(
     if not parsed.get("options"):
         parsed["options"] = seed.get("options", [])
     return ToyotaRecommendation.model_validate(parsed)
+
+
+async def _run_reviewer(
+    *,
+    run_id: str,
+    agent: AgentDefinition,
+    ctx: dict[str, Any],
+    costs: RunCostTracker,
+    request: CreateRunRequest,
+    policy: TeamPolicy,
+) -> None:
+    """Optional thorough/strict LLM review — STRONG tier; approved summaries only."""
+    from app.runtime_mode import llm_deterministic_synthesis_allowed
+
+    recommendation = ctx.get("recommendation")
+    financial = ctx.get("financial")
+    if recommendation is None or financial is None:
+        ctx["review_status"] = "FAIL"
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="TASK_FAILED",
+            executor_type=ExecutorType.LLM,
+            resource="review_recommendation",
+            result="FAIL",
+            message="Reviewer missing recommendation or FinancialContext.",
+        )
+        return
+
+    try:
+        validate_task_permissions(agent, "review_recommendation", require_integrations=False)
+    except PermissionDenied as exc:
+        ctx["permission_denials"] += 1
+        ctx["review_status"] = "FAIL"
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="PERMISSION_CHECK",
+            executor_type=ExecutorType.LLM,
+            resource="review_recommendation",
+            result="DENIED",
+            message=exc.message,
+        )
+        return
+
+    estimated_cost = 0.005
+    if not costs.can_afford_llm(estimated_cost, agent=agent):
+        ctx["budget_ok"] = False
+        ctx["review_status"] = "FAIL"
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="BUDGET_LIMIT",
+            executor_type=ExecutorType.LLM,
+            resource="review_recommendation",
+            result="DENIED",
+            message="Reviewer blocked by server/team/agent budget.",
+        )
+        return
+
+    try:
+        model_decision = choose_model(task_kind="review", work_style=policy.work_style, risk="high")
+    except ModelRoutingError as exc:
+        ctx["review_status"] = "FAIL"
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="MODEL_DECISION",
+            result="FAILED",
+            message=str(exc),
+        )
+        return
+
+    _audit(
+        run_id,
+        agent_id=agent.id,
+        event_type="MODEL_DECISION",
+        executor_type=ExecutorType.LLM,
+        resource="review_recommendation",
+        result=model_decision.tier,
+        message=(
+            f"tier={model_decision.tier} model={model_decision.model}. "
+            f"Reason: {model_decision.reason}"
+        ),
+    )
+
+    llm = get_llm_service()
+    allow_deterministic = llm_deterministic_synthesis_allowed()
+    status = "PASS"
+    issues: list[str] = []
+
+    if llm.is_configured():
+        try:
+            assert_integration_allowed(agent, "meta")
+            system = build_agent_system_prompt(
+                agent,
+                policy,
+                task_instruction=(
+                    "Review the proposed mobility recommendation against team and agent "
+                    "guardrails and financial safety. Use only the approved summaries. "
+                    "Never request raw Nessie rows."
+                ),
+                response_format='Return ONLY JSON: {"status":"PASS"|"FAIL","issues":[...]}',
+            )
+            user = json.dumps(
+                {
+                    "financial_context": financial.model_dump(),
+                    "recommendation": recommendation.model_dump(),
+                    "goal": request.goal,
+                }
+            )
+            headers = {
+                "Authorization": f"Bearer {llm.meta_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model_decision.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0.0,
+            }
+            data = await llm._post_chat_completion(headers=headers, payload=payload)
+            content = data["choices"][0]["message"]["content"]
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            from app.services.llm_service import _extract_json_object
+
+            parsed = _extract_json_object(str(content))
+            status = str(parsed.get("status") or "FAIL").upper()
+            if status not in {"PASS", "FAIL"}:
+                status = "FAIL"
+                issues.append("Reviewer returned invalid status")
+            issues = list(parsed.get("issues") or issues)
+            costs.record_llm(
+                cost_usd=estimated_cost, agent_id=agent.id, model_tier=model_decision.tier
+            )
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="LLM_CALL",
+                executor_type=ExecutorType.LLM,
+                resource="review_recommendation",
+                result=status,
+                message=f"Reviewer LLM result={status}; issues={issues}",
+                cost_usd=estimated_cost,
+            )
+        except Exception as exc:
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="LLM_ERROR",
+                executor_type=ExecutorType.LLM,
+                resource="review_recommendation",
+                result="FAILED",
+                message=f"Reviewer LLM failed: {exc}",
+            )
+            if not allow_deterministic:
+                ctx["review_status"] = "FAIL"
+                return
+            status, issues = _deterministic_review(financial, recommendation)
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="CODE_FALLBACK",
+                executor_type=ExecutorType.CODE,
+                resource="review_recommendation",
+                result=status,
+                message="Dev/test deterministic review after LLM failure.",
+            )
+    else:
+        if not allow_deterministic:
+            ctx["review_status"] = "FAIL"
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="LLM_ERROR",
+                result="FAILED",
+                message="Reviewer requires LLM but none configured.",
+            )
+            return
+        status, issues = _deterministic_review(financial, recommendation)
+        _audit(
+            run_id,
+            agent_id=agent.id,
+            event_type="CODE_FALLBACK",
+            executor_type=ExecutorType.CODE,
+            resource="review_recommendation",
+            result=status,
+            message="Dev/test deterministic review (LLM unconfigured).",
+        )
+
+    ctx["review_status"] = status
+    append_output(
+        run_id,
+        OutputItem(
+            id=f"out-{uuid4().hex[:8]}",
+            title="Reviewer Result",
+            agent_id=agent.id,
+            type="REVIEW",
+            summary=f"Review {status}",
+            content=json.dumps({"status": status, "issues": issues}),
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            cost_usd=estimated_cost if llm.is_configured() and not allow_deterministic else 0.0,
+            source_type="LLM" if llm.is_configured() else "CODE",
+        ),
+    )
+
+
+def _deterministic_review(
+    financial: FinancialContext,
+    recommendation: ToyotaRecommendation,
+) -> tuple[str, list[str]]:
+    issues: list[str] = []
+    if recommendation_contains_raw_nessie(recommendation.model_dump()):
+        issues.append("Recommendation appears to contain raw Nessie-like fields")
+    if financial.financial_stress == "HIGH" and recommendation.recommended_action in {
+        "BUY_CURRENT_VEHICLE",
+        "UPGRADE_VEHICLE",
+    }:
+        issues.append("High financial stress with ownership/upgrade recommendation")
+    if financial.financial_stress == "LOW" and recommendation.recommended_action not in {
+        "BUY_CURRENT_VEHICLE"
+    }:
+        issues.append("Low stress customer recommendation diverges from buy-current seed")
+    return ("FAIL" if issues else "PASS"), issues

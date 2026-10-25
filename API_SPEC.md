@@ -215,7 +215,8 @@ Recommended actions:
     "max_llm_cost_usd": 0.05,
     "max_llm_calls": 2
   },
-  "estimated_cost_usd": 0.01
+  "estimated_cost_usd": 0.01,
+  "allowed_integrations": ["nessie"]
 }
 ```
 
@@ -234,6 +235,9 @@ Optional/default:
 - `guardrails = []`
 - `model_policy = "auto"`
 - `estimated_cost_usd = 0`
+- `allowed_integrations = []` (empty = no extra restriction for backward compatibility; non-empty = named grants only, e.g. `nessie`, `meta`. Secret values are never included.)
+
+Runtime never silently broadens `allowed_tools` / data scopes / actions. Missing permission → plan/run fails with `PERMISSION_DENIED`.
 
 ---
 
@@ -244,11 +248,25 @@ Optional/default:
   "id": "team-toyota-mobility",
   "team_name": "Toyota Mobility Decision Team",
   "summary": "Proactively determines the customer's smartest mobility decision.",
-  "agents": []
+  "agents": [],
+  "policy": {
+    "max_llm_calls": 6,
+    "max_llm_cost_usd": 0.20,
+    "work_style": "balanced",
+    "guardrails": [
+      "Never expose raw customer financial data outside the financial boundary."
+    ]
+  }
 }
 ```
 
+Optional `policy` (`TeamPolicy`):
+- `work_style`: `fast` | `balanced` | `thorough`
+- team LLM budget ceiling (combined with server + agent budgets)
+- team-level natural-language guardrails (included in LLM system prompts)
+
 ---
+
 
 ## 3.5 TaskDefinition
 
