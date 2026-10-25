@@ -27,6 +27,15 @@ class LLMUnavailableError(Exception):
     """Raised when no provider is configured or the provider call fails."""
 
 
+def _toyota_capability_contract() -> str:
+    try:
+        from app.workflow_validate import capability_catalog_for_prompt
+
+        return " " + capability_catalog_for_prompt()
+    except Exception:
+        return ""
+
+
 class LLMService:
     """Abstraction over LLM providers. Never hardcode model names in callers."""
 
@@ -127,7 +136,10 @@ class LLMService:
             "engineering, etc. Only plan a Toyota/mobility financial team when the "
             "goal or enabled context_sources clearly involve vehicle/mobility/"
             "Toyota customer decisions. Do not force Toyota roles for unrelated goals. "
-            "If attachments or context_sources are provided, tailor the team to use them."
+            "If attachments or context_sources are provided, tailor the team to use them. "
+            "Prefer CODE/TOOL capabilities for deterministic work; only create AGENT "
+            "(LLM) responsibilities when judgment or synthesis is required. "
+            + _toyota_capability_contract()
         )
         user_payload: dict[str, Any] = {
             "goal": goal,

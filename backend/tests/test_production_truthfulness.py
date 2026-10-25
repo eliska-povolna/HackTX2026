@@ -48,7 +48,11 @@ def test_plan_team_errors_when_unconfigured_in_any_mode(monkeypatch):
     with TestClient(app) as client:
         r = client.post(
             "/api/teams/plan",
-            json={"goal": "x", "max_team_size": 3, "budget_preference": "balanced"},
+            json={
+                "goal": "Plan a hospitality research team for guest feedback",
+                "max_team_size": 3,
+                "budget_preference": "balanced",
+            },
         )
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "LLM_UNAVAILABLE"

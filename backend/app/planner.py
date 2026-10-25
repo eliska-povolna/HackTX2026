@@ -220,18 +220,6 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
     from app.attachments import planning_context_for_ids
 
     goal = (request.goal or "").strip()
-    if len(goal) < 12:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "NEED_MORE_INFO",
-                "message": (
-                    "Need more information to plan a team. Describe the goal with "
-                    "enough detail (who, what outcome, and any domain constraints)."
-                ),
-                "recoverable": True,
-            },
-        )
 
     attachment_ctx = planning_context_for_ids(list(request.attachment_ids or []))
     missing = [a["id"] for a in attachment_ctx if a.get("missing")]
@@ -241,6 +229,19 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             detail={
                 "code": "INVALID_REQUEST",
                 "message": f"Unknown attachment id(s): {', '.join(missing)}",
+                "recoverable": True,
+            },
+        )
+
+    if len(goal) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "NEED_MORE_INFO",
+                "message": (
+                    "Need more information to plan a team. Describe the goal with "
+                    "enough detail (who, what outcome, and any domain constraints)."
+                ),
                 "recoverable": True,
             },
         )
@@ -267,6 +268,43 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
         elif not team.policy.work_style:
             team.policy.work_style = work_style
         team = ensure_team_runtime_config(team)
+
+        # Toyota mobility runs use a fixed workflow. Align capabilities at PLAN
+        # time (never at execution), then validate before returning READY_TO_RUN.
+        from app.workflow_validate import (
+            toyota_workflow_applies,
+            validate_team_against_workflow,
+        )
+
+        source_ids = list(request.context_source_ids or [])
+        if toyota_workflow_applies(goal, source_ids or None):
+            result = validate_team_against_workflow(
+                team,
+                context_source_ids=source_ids or None,
+                repair=True,
+            )
+            team = result.team
+            if not result.ok:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "NEEDS_SETUP",
+                        "message": (
+                            "Planned team is not ready for the mobility workflow: "
+                            + "; ".join(result.errors[:4])
+                        ),
+                        "errors": result.errors,
+                        "repairs": result.repairs,
+                        "recoverable": True,
+                    },
+                )
+            if result.repairs:
+                logger.info(
+                    "Plan-time capability alignment (%d): %s",
+                    len(result.repairs),
+                    "; ".join(result.repairs[:8]),
+                )
+
         return PlanTeamResponse(
             team=team,
             planner_source=PlannerSource.LLM,

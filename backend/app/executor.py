@@ -1079,30 +1079,38 @@ async def _run_llm(
             cost_usd=0.0,
         )
 
-    # Safety: keep Toyota demo scenario split truthful if the model drifts.
-    safety_corrected = False
-    if financial.financial_stress == "LOW" and recommendation.recommended_action not in {
-        "BUY_CURRENT_VEHICLE"
-    }:
-        recommendation = build_fallback_recommendation(seed)
-        safety_corrected = True
-    if financial.financial_stress == "HIGH" and recommendation.recommended_action in {
-        "BUY_CURRENT_VEHICLE",
-        "UPGRADE_VEHICLE",
-    }:
-        recommendation = build_fallback_recommendation(seed)
-        safety_corrected = True
-    if safety_corrected:
-        _audit(
-            run_id,
-            agent_id=agent.id,
-            event_type="SAFETY_CORRECTION",
-            executor_type=ExecutorType.CODE,
-            resource="recommended_action",
-            result="CORRECTED",
-            message="Deterministic safety validator corrected recommended_action for financial stress.",
-            cost_usd=0.0,
-        )
+    # Generic affordability safety only — never force an outcome from customer id
+    # or a fixed stress→action map. If the chosen ownership option exceeds the
+    # safe budget, prefer the deterministic scored seed.
+    if recommendation.options:
+        action_to_option = {
+            "BUY_CURRENT_VEHICLE": "buy-current",
+            "UPGRADE_VEHICLE": "upgrade",
+            "RETURN_VEHICLE": "return",
+            "FLEXIBLE_MOBILITY": "flexible",
+        }
+        opt_id = action_to_option.get(recommendation.recommended_action)
+        chosen = next((o for o in recommendation.options if o.id == opt_id), None)
+        if (
+            chosen is not None
+            and chosen.safe_for_budget is False
+            and recommendation.recommended_action
+            in {"BUY_CURRENT_VEHICLE", "UPGRADE_VEHICLE"}
+        ):
+            recommendation = build_fallback_recommendation(seed)
+            _audit(
+                run_id,
+                agent_id=agent.id,
+                event_type="SAFETY_CORRECTION",
+                executor_type=ExecutorType.CODE,
+                resource="recommended_action",
+                result="CORRECTED",
+                message=(
+                    "Deterministic safety validator replaced an over-budget "
+                    "ownership recommendation with the scored seed."
+                ),
+                cost_usd=0.0,
+            )
 
     ctx["recommendation"] = recommendation
     assert not recommendation_contains_raw_nessie(recommendation.model_dump()) or not raw_blocked
@@ -1423,16 +1431,27 @@ def _deterministic_review(
     financial: FinancialContext,
     recommendation: ToyotaRecommendation,
 ) -> tuple[str, list[str]]:
+    """Generic safety review — no customer-id or stress→action forcing."""
     issues: list[str] = []
     if recommendation_contains_raw_nessie(recommendation.model_dump()):
         issues.append("Recommendation appears to contain raw Nessie-like fields")
-    if financial.financial_stress == "HIGH" and recommendation.recommended_action in {
-        "BUY_CURRENT_VEHICLE",
-        "UPGRADE_VEHICLE",
-    }:
-        issues.append("High financial stress with ownership/upgrade recommendation")
-    if financial.financial_stress == "LOW" and recommendation.recommended_action not in {
-        "BUY_CURRENT_VEHICLE"
-    }:
-        issues.append("Low stress customer recommendation diverges from buy-current seed")
+    action_to_option = {
+        "BUY_CURRENT_VEHICLE": "buy-current",
+        "UPGRADE_VEHICLE": "upgrade",
+    }
+    opt_id = action_to_option.get(recommendation.recommended_action)
+    if opt_id and recommendation.options:
+        chosen = next((o for o in recommendation.options if o.id == opt_id), None)
+        if chosen is not None and chosen.safe_for_budget is False:
+            issues.append(
+                "Recommended ownership option exceeds the safe mobility budget"
+            )
+        if (
+            chosen is not None
+            and chosen.monthly_cost is not None
+            and chosen.monthly_cost > financial.safe_mobility_budget
+        ):
+            issues.append(
+                "Recommended monthly cost exceeds safe_mobility_budget"
+            )
     return ("FAIL" if issues else "PASS"), issues

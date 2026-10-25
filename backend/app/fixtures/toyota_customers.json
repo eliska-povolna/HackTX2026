@@ -2,8 +2,8 @@
   {
     "id": "customer-stable",
     "name": "Sarah Miller",
-    "scenario_label": "Financially stable",
-    "description": "Strong reserve and stable cash flow.",
+    "scenario_label": "Strong finance + decision soon",
+    "description": "Lease ending soon, strong reserves — classic buy-current mobility case.",
     "vehicle": {
       "year": 2023,
       "make": "Toyota",
@@ -25,13 +25,15 @@
       "estimated_vehicle_value": 26800,
       "estimated_upgrade_payment": 585
     },
-    "nessie_customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709"
+    "nessie_customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709",
+    "nessie_provenance": "NESSIE_LIVE",
+    "demo_finance_label": "stable"
   },
   {
     "id": "customer-stressed",
     "name": "Jordan Lee",
-    "scenario_label": "Financially constrained",
-    "description": "Same vehicle context, weaker financial buffer.",
+    "scenario_label": "Weak finance + decision soon",
+    "description": "Same lease window as Sarah, thinner buffer — return often wins.",
     "vehicle": {
       "year": 2023,
       "make": "Toyota",
@@ -53,13 +55,15 @@
       "estimated_vehicle_value": 26800,
       "estimated_upgrade_payment": 585
     },
-    "nessie_customer_id": "8867eae3-b33d-4fa0-b64a-13d331dceec2"
+    "nessie_customer_id": "8867eae3-b33d-4fa0-b64a-13d331dceec2",
+    "nessie_provenance": "NESSIE_LIVE",
+    "demo_finance_label": "stressed"
   },
   {
     "id": "customer-no-action",
     "name": "Alex Kim",
-    "scenario_label": "No decision window",
-    "description": "Lease far from maturity and usage stable — relevance gate should stop before Nessie/LLM.",
+    "scenario_label": "No action needed",
+    "description": "Lease far from maturity and usage stable — relevance gate stops early.",
     "vehicle": {
       "year": 2023,
       "make": "Toyota",
@@ -81,6 +85,128 @@
       "estimated_vehicle_value": 27500,
       "estimated_upgrade_payment": 560
     },
-    "nessie_customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709"
+    "nessie_customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709",
+    "nessie_provenance": "NESSIE_LIVE",
+    "demo_finance_label": "stable"
+  },
+  {
+    "id": "customer-loan-strong",
+    "name": "Priya Shah",
+    "scenario_label": "Strong loan candidate",
+    "description": "High usage Camry owner with strong cashflow — good new-vehicle loan target.",
+    "vehicle": {
+      "year": 2019,
+      "make": "Toyota",
+      "model": "Camry",
+      "mileage": 78000
+    },
+    "contract": {
+      "type": "OWNED",
+      "months_remaining": 0,
+      "monthly_payment": 0.0,
+      "buyout_amount": 0.0
+    },
+    "usage": {
+      "monthly_miles_current": 1400,
+      "monthly_miles_six_months_ago": 1350,
+      "change_percent": 3.7
+    },
+    "market_assumptions": {
+      "estimated_vehicle_value": 16500,
+      "estimated_upgrade_payment": 520
+    },
+    "nessie_customer_id": "nessie-demo-loan-strong",
+    "nessie_provenance": "SYNTHETIC_ONLY",
+    "demo_finance_label": "loan_strong"
+  },
+  {
+    "id": "customer-loan-weak",
+    "name": "Marcus Nguyen",
+    "scenario_label": "Poor loan candidate",
+    "description": "Thin reserves and high debt burden — weak loan eligibility.",
+    "vehicle": {
+      "year": 2018,
+      "make": "Toyota",
+      "model": "Corolla",
+      "mileage": 92000
+    },
+    "contract": {
+      "type": "OWNED",
+      "months_remaining": 0,
+      "monthly_payment": 0.0,
+      "buyout_amount": 0.0
+    },
+    "usage": {
+      "monthly_miles_current": 700,
+      "monthly_miles_six_months_ago": 720,
+      "change_percent": -2.8
+    },
+    "market_assumptions": {
+      "estimated_vehicle_value": 11000,
+      "estimated_upgrade_payment": 480
+    },
+    "nessie_customer_id": "nessie-demo-loan-weak",
+    "nessie_provenance": "SYNTHETIC_ONLY",
+    "demo_finance_label": "loan_weak"
+  },
+  {
+    "id": "customer-high-usage",
+    "name": "Elena Rossi",
+    "scenario_label": "High usage + decision soon",
+    "description": "Lease ending with sharply higher mileage — mobility decision with upgrade pressure.",
+    "vehicle": {
+      "year": 2022,
+      "make": "Toyota",
+      "model": "Highlander",
+      "mileage": 54000
+    },
+    "contract": {
+      "type": "LEASE",
+      "months_remaining": 3,
+      "monthly_payment": 529.0,
+      "buyout_amount": 31000.0
+    },
+    "usage": {
+      "monthly_miles_current": 1600,
+      "monthly_miles_six_months_ago": 900,
+      "change_percent": 77.8
+    },
+    "market_assumptions": {
+      "estimated_vehicle_value": 33500,
+      "estimated_upgrade_payment": 640
+    },
+    "nessie_customer_id": "nessie-demo-high-usage",
+    "nessie_provenance": "SYNTHETIC_ONLY",
+    "demo_finance_label": "medium"
+  },
+  {
+    "id": "customer-mid-lease",
+    "name": "Chris Patel",
+    "scenario_label": "Mid-lease medium stress",
+    "description": "Moderate runway and mid lease — often not urgent for mobility action.",
+    "vehicle": {
+      "year": 2024,
+      "make": "Toyota",
+      "model": "Corolla Cross",
+      "mileage": 12000
+    },
+    "contract": {
+      "type": "LEASE",
+      "months_remaining": 14,
+      "monthly_payment": 399.0,
+      "buyout_amount": 22000.0
+    },
+    "usage": {
+      "monthly_miles_current": 850,
+      "monthly_miles_six_months_ago": 800,
+      "change_percent": 6.3
+    },
+    "market_assumptions": {
+      "estimated_vehicle_value": 24800,
+      "estimated_upgrade_payment": 455
+    },
+    "nessie_customer_id": "nessie-demo-medium",
+    "nessie_provenance": "SYNTHETIC_ONLY",
+    "demo_finance_label": "medium"
   }
 ]

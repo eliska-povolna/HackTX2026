@@ -76,6 +76,46 @@ ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
         actions_any=("read", "synthesize"),
         integrations=("meta",),
     ),
+    "load_toyota_portfolio": ActionRequirements(
+        tools=("load_toyota_portfolio",),
+        actions_any=("read", "calculate"),
+    ),
+    "filter_mobility_portfolio": ActionRequirements(
+        tools=("filter_mobility_portfolio", "evaluate_mobility_relevance"),
+        actions_any=("read", "calculate"),
+    ),
+    "build_portfolio_financials": ActionRequirements(
+        tools=("build_portfolio_financials", "nessie_load_customer_financials"),
+        data_scopes=("nessie_raw_financial", "financial_summary"),
+        actions=("read",),
+        integrations=("nessie",),
+    ),
+    "rank_customers": ActionRequirements(
+        tools=("rank_customers",),
+        data_scopes=("financial_summary",),
+        actions_any=("read", "calculate", "recommend"),
+    ),
+    "calculate_affordability": ActionRequirements(
+        tools=("calculate_affordability",),
+        data_scopes=("financial_summary",),
+        actions_any=("read", "calculate"),
+    ),
+    "calculate_emergency_runway": ActionRequirements(
+        tools=("calculate_emergency_runway",),
+        data_scopes=("financial_summary",),
+        actions_any=("read", "calculate"),
+    ),
+    "identify_financial_stress": ActionRequirements(
+        tools=("identify_financial_stress",),
+        data_scopes=("financial_summary",),
+        actions_any=("read", "calculate"),
+    ),
+    "explain_shortlist": ActionRequirements(
+        tools=("explain_shortlist",),
+        data_scopes=("financial_summary",),
+        actions_any=("synthesize", "recommend"),
+        integrations=("meta",),
+    ),
 }
 
 

@@ -111,6 +111,9 @@ class TeamPolicy(BaseModel):
     max_llm_cost_usd: float = 0.20
     work_style: str = "balanced"  # fast | balanced | thorough
     guardrails: list[str] = Field(default_factory=list)
+    # Assembled from installed capability pack (toyota mobility / loan).
+    workflow_kind: str = "mobility_decision"
+    scope: str = "single_customer"
 
 
 class TeamDefinition(BaseModel):
@@ -238,12 +241,31 @@ class PlanTeamRequest(BaseModel):
     budget_preference: str = "balanced"
     attachment_ids: list[str] = Field(default_factory=list)
     context_source_ids: list[str] = Field(default_factory=list)
+    planning_answers: dict[str, str] = Field(default_factory=dict)
+
+
+class JobAnalysisModel(BaseModel):
+    responsibility: str
+    scope: str = "single_customer"
+    workflow_kind: str
+    pack_id: Optional[str] = None
+    required_work: list[str] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(default_factory=list)
+    required_connections: list[str] = Field(default_factory=list)
+    work_steps: list[dict] = Field(default_factory=list)
+    missing_capabilities: list[str] = Field(default_factory=list)
+    follow_up_questions: list[str] = Field(default_factory=list)
+    execution_status: str = "READY"
+    suggested_agent_count: int = 0
+    notes: list[str] = Field(default_factory=list)
 
 
 class PlanTeamResponse(BaseModel):
-    team: TeamDefinition
+    team: Optional[TeamDefinition] = None
     planner_source: PlannerSource
     fallback_used: bool
+    job_analysis: Optional[JobAnalysisModel] = None
+    execution_status: str = "READY"
 
 
 class SaveTeamRequest(BaseModel):

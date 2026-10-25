@@ -60,17 +60,28 @@ class NessieClient:
         return {}
 
     def demo_label_for_customer_id(self, nessie_customer_id: str) -> Optional[str]:
-        """Return 'stable' / 'stressed' for known demo customers (live or fixture)."""
-        if nessie_customer_id in {"nessie-demo-001"} or nessie_customer_id.endswith("001"):
-            if nessie_customer_id.startswith("nessie-demo"):
-                return "stable"
-        if nessie_customer_id in {"nessie-demo-002"} or (
-            nessie_customer_id.startswith("nessie-demo") and nessie_customer_id.endswith("002")
-        ):
-            return "stressed"
+        """Return finance preset label for known demo / synthetic customers."""
+        synthetic = {
+            "nessie-demo-001": "stable",
+            "nessie-demo-002": "stressed",
+            "nessie-demo-loan-strong": "loan_strong",
+            "nessie-demo-loan-weak": "loan_weak",
+            "nessie-demo-high-usage": "medium",
+            "nessie-demo-medium": "medium",
+        }
+        if nessie_customer_id in synthetic:
+            return synthetic[nessie_customer_id]
+        if nessie_customer_id.endswith("001") and "8867" not in nessie_customer_id:
+            # Prefer live-id map below for real UUIDs
+            pass
         for label, info in self._live_ids.items():
             if info.get("customer_id") == nessie_customer_id:
                 return label
+        # Live sandbox UUIDs used by Sarah / Jordan fixtures
+        if nessie_customer_id == "b8470c8a-6fde-495f-b1f1-792c771b0709":
+            return "stable"
+        if nessie_customer_id == "8867eae3-b33d-4fa0-b64a-13d331dceec2":
+            return "stressed"
         return None
 
     def clear_run_cache(self) -> None:
@@ -120,10 +131,22 @@ class NessieClient:
     def _fixture_customer(self, nessie_customer_id: str) -> dict:
         customers = self._fixture.get("customers", {})
         label = self.demo_label_for_customer_id(nessie_customer_id)
-        if label == "stable":
-            return customers["nessie-demo-001"]
-        if label == "stressed":
-            return customers["nessie-demo-002"]
+        # Map finance presets onto the two detailed fixture bodies when needed.
+        if label in {"stable", "loan_strong"}:
+            base = dict(customers.get("nessie-demo-001") or next(iter(customers.values())))
+            base["label"] = label
+            base["customer_id"] = nessie_customer_id
+            return base
+        if label in {"stressed", "loan_weak"}:
+            base = dict(customers.get("nessie-demo-002") or next(iter(customers.values())))
+            base["label"] = label
+            base["customer_id"] = nessie_customer_id
+            return base
+        if label == "medium":
+            base = dict(customers.get("nessie-demo-001") or next(iter(customers.values())))
+            base["label"] = "medium"
+            base["customer_id"] = nessie_customer_id
+            return base
         if nessie_customer_id in customers:
             return customers[nessie_customer_id]
         return customers["nessie-demo-001"]

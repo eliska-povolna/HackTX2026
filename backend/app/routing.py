@@ -68,6 +68,46 @@ CAPABILITIES: dict[str, Capability] = {
         reason="Natural-language synthesis required",
         requires_reasoning=True,
     ),
+    "load_toyota_portfolio": Capability(
+        executor=ExecutorType.CODE,
+        reason="Deterministic portfolio load from installed fixtures",
+        deterministic=True,
+    ),
+    "filter_mobility_portfolio": Capability(
+        executor=ExecutorType.CODE,
+        reason="Deterministic relevance filter across portfolio",
+        deterministic=True,
+    ),
+    "build_portfolio_financials": Capability(
+        executor=ExecutorType.TOOL,
+        reason="Uses Nessie connector per customer; emits summaries only",
+        requires_external_data=True,
+    ),
+    "rank_customers": Capability(
+        executor=ExecutorType.CODE,
+        reason="Deterministic ranking on minimized summaries",
+        deterministic=True,
+    ),
+    "calculate_affordability": Capability(
+        executor=ExecutorType.CODE,
+        reason="Deterministic implementation available",
+        deterministic=True,
+    ),
+    "calculate_emergency_runway": Capability(
+        executor=ExecutorType.CODE,
+        reason="Deterministic implementation available",
+        deterministic=True,
+    ),
+    "identify_financial_stress": Capability(
+        executor=ExecutorType.CODE,
+        reason="Deterministic implementation available",
+        deterministic=True,
+    ),
+    "explain_shortlist": Capability(
+        executor=ExecutorType.LLM,
+        reason="Natural-language shortlist explanation",
+        requires_reasoning=True,
+    ),
 }
 
 

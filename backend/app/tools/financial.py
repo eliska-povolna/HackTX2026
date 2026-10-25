@@ -74,8 +74,8 @@ def build_financial_context(nessie_payload: dict) -> FinancialContext:
         elif customer_id.endswith("002") or customer_id == "nessie-demo-002":
             demo_label = "stressed"
 
-    if demo_label == "stable":
-        return FinancialContext(
+    presets = {
+        "stable": FinancialContext(
             monthly_income=4850.0,
             fixed_expenses=2250.0,
             variable_spending=900.0,
@@ -85,9 +85,8 @@ def build_financial_context(nessie_payload: dict) -> FinancialContext:
             emergency_runway_months=4.7,
             debt_burden_ratio=0.16,
             financial_stress="LOW",
-        )
-    if demo_label == "stressed":
-        return FinancialContext(
+        ),
+        "stressed": FinancialContext(
             monthly_income=4850.0,
             fixed_expenses=3100.0,
             variable_spending=1050.0,
@@ -97,7 +96,43 @@ def build_financial_context(nessie_payload: dict) -> FinancialContext:
             emergency_runway_months=0.9,
             debt_burden_ratio=0.31,
             financial_stress="HIGH",
-        )
+        ),
+        "loan_strong": FinancialContext(
+            monthly_income=7200.0,
+            fixed_expenses=2400.0,
+            variable_spending=1100.0,
+            monthly_free_cashflow=3700.0,
+            cash_reserve=18000.0,
+            safe_mobility_budget=890.0,
+            emergency_runway_months=5.1,
+            debt_burden_ratio=0.14,
+            financial_stress="LOW",
+        ),
+        "loan_weak": FinancialContext(
+            monthly_income=3900.0,
+            fixed_expenses=2800.0,
+            variable_spending=900.0,
+            monthly_free_cashflow=200.0,
+            cash_reserve=600.0,
+            safe_mobility_budget=0.0,
+            emergency_runway_months=0.2,
+            debt_burden_ratio=0.42,
+            financial_stress="HIGH",
+        ),
+        "medium": FinancialContext(
+            monthly_income=5200.0,
+            fixed_expenses=2600.0,
+            variable_spending=1000.0,
+            monthly_free_cashflow=1600.0,
+            cash_reserve=4500.0,
+            safe_mobility_budget=480.0,
+            emergency_runway_months=1.3,
+            debt_burden_ratio=0.24,
+            financial_stress="MEDIUM",
+        ),
+    }
+    if demo_label in presets:
+        return presets[demo_label]
 
     return FinancialContext(
         monthly_income=round(monthly_income, 2),

@@ -260,3 +260,153 @@ def _next_step_label(action: str) -> str:
 
 def build_fallback_recommendation(seed: dict[str, Any]) -> ToyotaRecommendation:
     return ToyotaRecommendation.model_validate(seed)
+
+
+def calculate_emergency_runway(financial: FinancialContext) -> dict[str, Any]:
+    return {
+        "emergency_runway_months": financial.emergency_runway_months,
+        "cash_reserve": financial.cash_reserve,
+    }
+
+
+def identify_financial_stress(financial: FinancialContext) -> dict[str, Any]:
+    return {
+        "financial_stress": financial.financial_stress,
+        "debt_burden_ratio": financial.debt_burden_ratio,
+        "monthly_free_cashflow": financial.monthly_free_cashflow,
+    }
+
+
+def calculate_affordability(financial: FinancialContext) -> dict[str, Any]:
+    """Deterministic affordability / headroom signals (no LLM)."""
+    stress = financial.financial_stress
+    headroom = financial.safe_mobility_budget
+    loan_fit = (
+        stress == "LOW"
+        and financial.emergency_runway_months >= 3.0
+        and financial.debt_burden_ratio <= 0.22
+        and financial.monthly_free_cashflow >= 1200
+    )
+    risky = stress == "HIGH" or financial.emergency_runway_months < 1.5
+    return {
+        "financial_stress": stress,
+        "safe_mobility_budget": headroom,
+        "emergency_runway_months": financial.emergency_runway_months,
+        "debt_burden_ratio": financial.debt_burden_ratio,
+        "monthly_free_cashflow": financial.monthly_free_cashflow,
+        "cash_reserve": financial.cash_reserve,
+        "loan_candidate_fit": loan_fit,
+        "high_risk": risky,
+        "affordability_score": _affordability_score(financial),
+    }
+
+
+def _affordability_score(financial: FinancialContext) -> int:
+    score = 50
+    if financial.financial_stress == "LOW":
+        score += 25
+    elif financial.financial_stress == "HIGH":
+        score -= 30
+    score += int(min(max(financial.emergency_runway_months * 5, -20), 25))
+    score += int(min(max(financial.monthly_free_cashflow / 80, -20), 20))
+    score -= int(min(financial.debt_burden_ratio * 80, 30))
+    return max(0, min(100, score))
+
+
+def rank_customers(
+    summaries: list[dict[str, Any]],
+    *,
+    purpose: str = "loan",
+) -> dict[str, Any]:
+    """
+    Deterministic portfolio ranking from minimized customer summaries.
+    Never receives raw Nessie rows — only derived FinancialContext fields + Toyota signals.
+    """
+    purpose_l = (purpose or "loan").lower()
+    ranked: list[dict[str, Any]] = []
+    for row in summaries:
+        financial = row.get("financial") or {}
+        toyota = row.get("toyota") or {}
+        relevance = row.get("relevance") or {}
+        contract = toyota.get("contract") or {}
+        usage = toyota.get("usage") or {}
+        score = int(financial.get("affordability_score") or _score_from_fields(financial))
+        reasons: list[str] = []
+
+        if purpose_l in {"loan", "loan_opportunity", "lending"}:
+            if financial.get("loan_candidate_fit"):
+                score += 15
+                reasons.append("Strong loan-fit signals (stress/runway/cashflow)")
+            if financial.get("high_risk"):
+                score -= 25
+                reasons.append("Elevated financial risk")
+            if float(financial.get("debt_burden_ratio") or 0) > 0.28:
+                score -= 10
+                reasons.append("Elevated debt burden")
+            miles = float((toyota.get("usage") or {}).get("monthly_miles_current") or 0)
+            if miles >= 1200:
+                score += 8
+                reasons.append("High usage supports vehicle financing need")
+        else:
+            # mobility priority: decision window + finance pressure
+            if relevance.get("relevant"):
+                score += 20
+                reasons.extend(list(relevance.get("reasons") or [])[:2])
+            else:
+                score -= 40
+                reasons.append("Outside mobility decision window")
+            months = int(contract.get("months_remaining") if contract.get("months_remaining") is not None else 99)
+            if months <= 6:
+                score += 10
+            if abs(float(usage.get("change_percent") or 0)) >= 20:
+                score += 5
+
+        score = max(0, min(100, score))
+        ranked.append(
+            {
+                "customer_id": row.get("customer_id"),
+                "name": row.get("name"),
+                "score": score,
+                "reasons": reasons[:4],
+                "financial_summary": {
+                    "financial_stress": financial.get("financial_stress"),
+                    "safe_mobility_budget": financial.get("safe_mobility_budget"),
+                    "monthly_free_cashflow": financial.get("monthly_free_cashflow"),
+                    "cash_reserve": financial.get("cash_reserve"),
+                    "emergency_runway_months": financial.get("emergency_runway_months"),
+                    "debt_burden_ratio": financial.get("debt_burden_ratio"),
+                    "affordability_score": financial.get("affordability_score") or score,
+                    "nessie_provenance": row.get("nessie_provenance"),
+                },
+                "vehicle": toyota.get("vehicle"),
+                "contract": {
+                    "months_remaining": contract.get("months_remaining"),
+                    "monthly_payment": contract.get("monthly_payment"),
+                },
+            }
+        )
+
+    ranked.sort(key=lambda r: r["score"], reverse=True)
+    return {
+        "purpose": purpose_l,
+        "candidates": ranked,
+        "top_ids": [r["customer_id"] for r in ranked[:5]],
+    }
+
+
+def _score_from_fields(financial: dict[str, Any]) -> int:
+    try:
+        fc = FinancialContext(
+            monthly_income=float(financial.get("monthly_income") or 0),
+            fixed_expenses=float(financial.get("fixed_expenses") or 0),
+            variable_spending=float(financial.get("variable_spending") or 0),
+            monthly_free_cashflow=float(financial.get("monthly_free_cashflow") or 0),
+            cash_reserve=float(financial.get("cash_reserve") or 0),
+            safe_mobility_budget=float(financial.get("safe_mobility_budget") or 0),
+            emergency_runway_months=float(financial.get("emergency_runway_months") or 0),
+            debt_burden_ratio=float(financial.get("debt_burden_ratio") or 0),
+            financial_stress=str(financial.get("financial_stress") or "MEDIUM"),
+        )
+        return _affordability_score(fc)
+    except Exception:
+        return 50
