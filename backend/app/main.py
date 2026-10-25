@@ -436,7 +436,14 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
 
     from app.workflow_support import require_supported_responsibility, require_supported_team
 
-    analysis = require_supported_responsibility(request.goal)
+    analysis = require_supported_responsibility(
+        request.goal,
+        context_source_ids=list(
+            dict.fromkeys(
+                [*(request.context_source_ids or []), *(request.context.context_source_ids or [])]
+            )
+        ),
+    )
     require_supported_team(request.team)
     policy = request.team.policy
     if analysis.execution_status.value == "READY" and policy and (

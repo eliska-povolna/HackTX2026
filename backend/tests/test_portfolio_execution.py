@@ -231,6 +231,11 @@ def test_portfolio_result_survives_database_hydration(monkeypatch):
         restored = client.get("/api/runs/" + run_id).json()
         assert restored["portfolio_result"] == result["portfolio_result"]
         assert restored["recommendation"] is None
+        # Task statuses/actions must survive restart (not all COMPLETED / all WAITING).
+        assert [(t["action"], t["status"]) for t in restored["tasks"]] == [
+            (t["action"], t["status"]) for t in result["tasks"]
+        ]
+        assert any(t["status"] == "COMPLETED" for t in restored["tasks"])
         assert restored["metrics"] == result["metrics"]
     engine.dispose()
 

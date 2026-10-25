@@ -10,5 +10,35 @@
     "checking_id": "d8f028a0-af69-40ef-955f-b798b9796edd",
     "savings_id": "8ef55682-0acf-488e-907a-02382bdc4505",
     "label": "stressed"
+  },
+  "loan_strong": {
+    "customer_id": "afadfb0a-adc0-4497-92c7-2d19c4302cad",
+    "checking_id": "29565f4f-6d54-4628-8bcd-bd3c3df38938",
+    "savings_id": "609ae8e3-b273-4357-8b2d-6b5d406af3f6",
+    "label": "loan_strong"
+  },
+  "loan_weak": {
+    "customer_id": "521f2bfe-f832-4343-88df-74f0296fbede",
+    "checking_id": "767e16fe-845c-49ec-9a64-b3937833a1de",
+    "savings_id": "3eac9ae9-9447-4629-af8d-375caccc9dda",
+    "label": "loan_weak"
+  },
+  "medium": {
+    "customer_id": "867b3db9-20bf-4ae5-9f6b-ab9d1f283c12",
+    "checking_id": "1250bb7b-b030-4e08-9fa5-34cb7d519426",
+    "savings_id": "d9b9a957-ac7e-437f-8b7f-00a14e7cda40",
+    "label": "medium"
+  },
+  "mid_lease": {
+    "customer_id": "fc2e87e7-3604-491d-a3ff-1a93a4090d28",
+    "checking_id": "a3092eb5-4247-498e-9efa-855fa66070ff",
+    "savings_id": "865383c7-cdeb-4cb1-9da0-3d1a470266a5",
+    "label": "mid_lease"
+  },
+  "no_action": {
+    "customer_id": "8a78f5c6-4fdf-4c2b-8083-e10e4f077047",
+    "checking_id": "ea880acd-da7c-4574-838e-db1f5f1e1022",
+    "savings_id": "e862d823-4abc-4fff-bf09-71e400a112bf",
+    "label": "no_action"
   }
 }

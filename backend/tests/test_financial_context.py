@@ -27,6 +27,43 @@ def test_stressed_fixture_financial_context():
     assert ctx.safe_mobility_budget == 390.0
 
 
+def test_live_payload_is_not_overwritten_by_demo_label():
+    """Live/cache banking inputs must drive results even when demo_label is present."""
+    thin = {
+        "customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709",
+        "source_note": "live",
+        "demo_label": "stable",
+        "accounts": [{"balance": 400}, {"balance": 200}],
+        "deposits": [{"amount": 4000}, {"amount": 4000}],
+        "purchases": [
+            {"amount": 2200, "description": "RENT", "fixed": True, "category": "housing"},
+            {"amount": 469, "description": "TOYOTA LEASE", "fixed": True, "category": "auto"},
+            {"amount": 900, "description": "GROCERIES", "fixed": False},
+        ],
+        "loans": [],
+    }
+    rich = {
+        **thin,
+        "accounts": [{"balance": 8000}, {"balance": 12000}],
+        "deposits": [{"amount": 7500}, {"amount": 7500}],
+        "purchases": [
+            {"amount": 1600, "description": "RENT", "fixed": True, "category": "housing"},
+            {"amount": 400, "description": "AUTO INSURANCE", "fixed": True, "category": "insurance"},
+            {"amount": 469, "description": "TOYOTA LEASE", "fixed": True, "category": "auto"},
+            {"amount": 500, "description": "GROCERIES", "fixed": False},
+        ],
+    }
+    ctx_thin = build_financial_context(thin)
+    ctx_rich = build_financial_context(rich)
+    assert ctx_thin.cash_reserve == 600.0
+    assert ctx_rich.cash_reserve == 20000.0
+    assert ctx_thin.safe_mobility_budget != ctx_rich.safe_mobility_budget
+    # Must not collapse to the stable fixture preset.
+    assert ctx_rich.safe_mobility_budget != 560.0 or ctx_rich.monthly_free_cashflow != 1700.0
+    assert ctx_thin.financial_stress == "HIGH"
+    assert ctx_rich.financial_stress == "LOW"
+
+
 def test_scenarios_differ_on_recommendation():
     toyota_a = load_toyota_customer("customer-stable")
     toyota_b = load_toyota_customer("customer-stressed")

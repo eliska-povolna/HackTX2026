@@ -71,17 +71,9 @@ class NessieClient:
         }
         if nessie_customer_id in synthetic:
             return synthetic[nessie_customer_id]
-        if nessie_customer_id.endswith("001") and "8867" not in nessie_customer_id:
-            # Prefer live-id map below for real UUIDs
-            pass
         for label, info in self._live_ids.items():
             if info.get("customer_id") == nessie_customer_id:
                 return label
-        # Live sandbox UUIDs used by Sarah / Jordan fixtures
-        if nessie_customer_id == "b8470c8a-6fde-495f-b1f1-792c771b0709":
-            return "stable"
-        if nessie_customer_id == "8867eae3-b33d-4fa0-b64a-13d331dceec2":
-            return "stressed"
         return None
 
     def clear_run_cache(self) -> None:

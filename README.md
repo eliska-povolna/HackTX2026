@@ -143,6 +143,21 @@ Typical path: TOOL (Toyota) → CODE (relevance) → TOOL (Nessie) → CODE (Fin
 
 Raw Nessie rows never enter the Decision Agent / LLM prompt — only `FinancialContext` crosses that boundary.
 
+### Financial derivation and scoring (no live overwrite)
+
+`build_financial_context` turns Nessie accounts / deposits / purchases into a derived `FinancialContext` (income, fixed vs variable spend, free cashflow, runway, safe mobility budget, stress).
+
+- **Live / cache Nessie** (`source_note=live`): always derive from the banking payload. A `demo_label` must **not** replace live numbers with a hard-coded preset.
+- **Fixture fallback only** (`source_note=fallback`): labeled demo presets may still apply so synthetic profiles stay distinct when the sandbox is unavailable.
+- Stress uses runway + free cashflow + mobility budget (mobility-relevant buffer), not rent-inflated debt ratios alone.
+- `score_mobility_options` is deterministic CODE: buy / upgrade / return / flexible get fit scores from budget fit, stress, runway, usage change, and buyout vs market value. Same vehicle + different finance → different winner (Sarah buy vs Jordan return).
+
+Portfolio loan ranking uses the same derived fields; tied scores break on financial headroom. Provenance (`NESSIE_LIVE` / `NESSIE_FALLBACK` / `CACHE`) stays visible in results.
+
+### Assemble / planning gate
+
+Planning classifies the goal against the **installed Toyota pack** (single-customer mobility, portfolio mobility, loan shortlist). Recruiting and unrelated goals return `NEEDS_SETUP` with missing connectors. With Toyota context sources enabled, the Create-form sample mobility goal assembles a runnable team instead of a dead-end capability error.
+
 ---
 
 ## Live stack

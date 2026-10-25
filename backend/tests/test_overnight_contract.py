@@ -10,11 +10,36 @@ from app.planner import build_fallback_team
 from app.team_normalize import ensure_team_runtime_config
 
 MOBILITY = "Recommend the next mobility decision for one Toyota customer."
+SAMPLE_UI_GOAL = (
+    "Determine the smartest next mobility decision for this customer using "
+    "vehicle, contract, usage, and financial context."
+)
 GOALS = [
     ("Build a recruiting team that finds candidates, emails them and schedules interviews.", "ATS"),
     ("Find the strongest Toyota customers to target for a new vehicle loan.", "Loan targeting"),
     ("Identify Toyota customers who currently need a mobility decision and recommend the best next step.", "Portfolio"),
 ]
+
+
+def test_ui_sample_goal_assembles_with_toyota_context(monkeypatch):
+    """Create-form sample quest must not die on 'matching installed capability pack'."""
+    from types import SimpleNamespace
+
+    from app.planner import build_fallback_team
+
+    weak = build_fallback_team(SAMPLE_UI_GOAL, 5)
+    planner = SimpleNamespace(plan_team=AsyncMock(return_value=weak))
+    monkeypatch.setattr("app.planner.get_llm_service", lambda: planner)
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/teams/plan",
+            json={
+                "goal": SAMPLE_UI_GOAL,
+                "context_source_ids": ["toyota_customer", "nessie_banking"],
+            },
+        )
+    assert res.status_code == 200, res.text
+    assert res.json()["team"]["policy"]["workflow_kind"] == "mobility_decision"
 
 @pytest.mark.parametrize("goal,reason", GOALS[:1])
 def test_unsupported_plan_does_not_call_llm(monkeypatch, goal, reason):

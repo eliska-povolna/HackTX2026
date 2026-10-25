@@ -8,14 +8,24 @@ from fastapi import HTTPException
 from app.job_analysis import ExecutionStatus, JobScope, WorkflowKind, analyze_job
 
 
-def require_supported_responsibility(goal: str, *, planning: bool = False, answers=None):
-    analysis = analyze_job(goal, answers=answers)
+def require_supported_responsibility(
+    goal: str,
+    *,
+    planning: bool = False,
+    answers=None,
+    context_source_ids=None,
+):
+    analysis = analyze_job(goal, answers=answers, context_source_ids=context_source_ids)
     message = None
     if analysis.execution_status == ExecutionStatus.NEEDS_SETUP:
         # Legacy runs may have short labels ("demo"). Planning must classify
         # every responsibility; runtime still rejects explicit unsupported work.
         if planning or (goal or "").strip().lower() not in {"", "demo"}:
-            message = "Missing capabilities: " + ", ".join(analysis.missing_capabilities)
+            missing = ", ".join(analysis.missing_capabilities) or "required connectors"
+            message = (
+                f"Missing capabilities: {missing}. "
+                "This demo assembles Toyota mobility or loan-targeting teams only."
+            )
     elif analysis.execution_status == ExecutionStatus.NEED_MORE_INFO:
         raise HTTPException(status_code=400, detail={
             "code": "NEED_MORE_INFO",

@@ -72,7 +72,20 @@ def _detect_unsupported(goal: str) -> list[str]:
     return missing
 
 
-def _detect_workflow(goal: str, answers: dict[str, str]) -> WorkflowKind:
+def _toyota_sources_enabled(context_source_ids: Optional[list[str]]) -> bool:
+    ids = {str(s).lower() for s in (context_source_ids or [])}
+    return any(
+        s.startswith("toyota") or s in {"nessie_banking", "nessie", "vehicle_data", "lease_data", "usage_data"}
+        for s in ids
+    )
+
+
+def _detect_workflow(
+    goal: str,
+    answers: dict[str, str],
+    *,
+    context_source_ids: Optional[list[str]] = None,
+) -> WorkflowKind:
     g = _blob(goal)
     intent = (answers.get("intent") or answers.get("workflow") or "").lower()
 
@@ -94,6 +107,7 @@ def _detect_workflow(goal: str, answers: dict[str, str]) -> WorkflowKind:
             "shortlist",
             "rank customers",
             "portfolio lend",
+            "loan opportunit",
         )
         if t in g
     )
@@ -104,11 +118,21 @@ def _detect_workflow(goal: str, answers: dict[str, str]) -> WorkflowKind:
             "lease",
             "buyout",
             "return the vehicle",
+            "return or",
+            "buy, return",
+            "buy or return",
             "next step",
             "ownership",
             "decision window",
             "who currently need",
             "recommend the best next",
+            "next mobility",
+            "smartest next",
+            "buy current",
+            "upgrade their vehicle",
+            "vehicle decision",
+            "contract",
+            "usage",
         )
         if t in g
     )
@@ -119,6 +143,14 @@ def _detect_workflow(goal: str, answers: dict[str, str]) -> WorkflowKind:
         return WorkflowKind.MOBILITY_DECISION
     if loan_hits >= 1 and mobility_hits >= 1:
         return WorkflowKind.AMBIGUOUS
+    # Demo UI enables Toyota/Nessie sources for the installed pack. Prefer the
+    # runnable mobility workflow over a dead-end "unsupported" assemble error.
+    if _toyota_sources_enabled(context_source_ids) and (
+        "toyota" in g or "customer" in g or "vehicle" in g or "decide" in g or "recommend" in g
+    ):
+        return WorkflowKind.MOBILITY_DECISION
+    if "toyota" in g and ("customer" in g or "vehicle" in g or "mobility" in g):
+        return WorkflowKind.MOBILITY_DECISION
     if "toyota" in g or "customer" in g or "vehicle" in g:
         return WorkflowKind.AMBIGUOUS
     return WorkflowKind.UNSUPPORTED
@@ -325,36 +357,44 @@ def analyze_job(
             ],
         )
 
-    workflow = _detect_workflow(goal, answers)
+    workflow = _detect_workflow(goal, answers, context_source_ids=context_source_ids)
     scope = _detect_scope(goal, answers)
 
     if workflow == WorkflowKind.AMBIGUOUS:
-        questions = [
-            "Is this a mobility / lease decision, or a vehicle-loan targeting opportunity?",
-        ]
-        if "scope" not in answers:
-            questions.append("Should this evaluate one customer or the full Toyota demo portfolio?")
-        if len(questions) < 3:
-            questions.append("Should financial affordability from Nessie be required?")
-        return JobAnalysis(
-            responsibility=goal,
-            scope=scope,
-            workflow_kind=WorkflowKind.AMBIGUOUS,
-            pack_id=TOYOTA_PACK_ID,
-            follow_up_questions=questions[:4],
-            execution_status=ExecutionStatus.NEED_MORE_INFO,
-            suggested_agent_count=0,
-            notes=["Ambiguous goal — answer follow-ups before assembling agents."],
-        )
+        # With Toyota context selected, assemble the default single-customer
+        # mobility team instead of blocking the Create form on follow-ups.
+        if _toyota_sources_enabled(context_source_ids):
+            workflow = WorkflowKind.MOBILITY_DECISION
+            scope = JobScope.SINGLE_CUSTOMER
+        else:
+            questions = [
+                "Is this a mobility / lease decision, or a vehicle-loan targeting opportunity?",
+            ]
+            if "scope" not in answers:
+                questions.append("Should this evaluate one customer or the full Toyota demo portfolio?")
+            if len(questions) < 3:
+                questions.append("Should financial affordability from Nessie be required?")
+            return JobAnalysis(
+                responsibility=goal,
+                scope=scope,
+                workflow_kind=WorkflowKind.AMBIGUOUS,
+                pack_id=TOYOTA_PACK_ID,
+                follow_up_questions=questions[:4],
+                execution_status=ExecutionStatus.NEED_MORE_INFO,
+                suggested_agent_count=0,
+                notes=["Ambiguous goal — answer follow-ups before assembling agents."],
+            )
 
     if workflow == WorkflowKind.UNSUPPORTED:
-        # Generic unsupported without clear recruiting signals
         return JobAnalysis(
             responsibility=goal,
             workflow_kind=WorkflowKind.UNSUPPORTED,
-            missing_capabilities=["matching installed capability pack"],
+            missing_capabilities=[
+                "Toyota mobility decision pack or vehicle-loan targeting pack",
+            ],
             follow_up_questions=[
-                "Can you rephrase using Toyota mobility decisions or vehicle-loan targeting?",
+                "Rephrase as a Toyota mobility / lease decision, or a vehicle-loan shortlist.",
+                "Enable Toyota customer context, then use the sample mobility goal.",
             ],
             execution_status=ExecutionStatus.NEEDS_SETUP,
             notes=["Goal does not match the installed Toyota Mobility pack."],

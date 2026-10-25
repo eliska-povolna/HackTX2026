@@ -48,27 +48,59 @@ def build_financial_context(nessie_payload: dict) -> FinancialContext:
 
     cash_reserve = sum(float(a.get("balance") or 0) for a in accounts)
     monthly_free_cashflow = monthly_income - fixed - variable
-    # Cap mobility budget: ~30% of free cashflow, min floor
-    safe_mobility_budget = max(0.0, round(min(monthly_free_cashflow * 0.35, monthly_free_cashflow - 200), 2))
+    # Share of free cashflow that can go to a vehicle payment (derived, not a preset).
+    # Keep a small non-mobility buffer; thin free cashflow → zero mobility budget.
     if monthly_free_cashflow <= 0:
         safe_mobility_budget = 0.0
+    elif monthly_free_cashflow < 400:
+        safe_mobility_budget = 0.0
+    else:
+        safe_mobility_budget = max(
+            0.0,
+            round(min(monthly_free_cashflow * 0.45, monthly_free_cashflow - 150), 2),
+        )
 
     emergency_runway_months = (
         round(cash_reserve / max(fixed + variable, 1.0), 1) if (fixed + variable) > 0 else 99.0
     )
     debt_burden_ratio = round((fixed) / max(monthly_income, 1.0), 2)
 
-    if emergency_runway_months >= 3.5 and debt_burden_ratio <= 0.22 and monthly_free_cashflow >= 1200:
+    # Mobility stress is about buffer and headroom, not rent-inflated debt ratios.
+    # Typical lease customers have housing + auto fixed costs that would always look "HIGH"
+    # under a naive fixed/income threshold.
+    if (
+        emergency_runway_months >= 2.5
+        and monthly_free_cashflow >= 1100
+        and safe_mobility_budget >= 350
+    ):
         stress = "LOW"
-    elif emergency_runway_months < 1.5 or debt_burden_ratio >= 0.28 or monthly_free_cashflow < 900:
+    elif (
+        emergency_runway_months < 1.5
+        or monthly_free_cashflow < 900
+        or safe_mobility_budget <= 0
+    ):
         stress = "HIGH"
     else:
         stress = "MEDIUM"
 
-    # Known QuestMaster demo customers (fixture OR seeded live IDs via demo_label).
+    derived = FinancialContext(
+        monthly_income=round(monthly_income, 2),
+        fixed_expenses=round(fixed, 2),
+        variable_spending=round(variable, 2),
+        monthly_free_cashflow=round(monthly_free_cashflow, 2),
+        cash_reserve=round(cash_reserve, 2),
+        safe_mobility_budget=round(safe_mobility_budget, 2),
+        emergency_runway_months=emergency_runway_months,
+        debt_burden_ratio=debt_burden_ratio,
+        financial_stress=stress,
+    )
+
+    # Fixture/fallback payloads may carry a demo_label that maps synthetic profiles onto
+    # distinct banking bodies. Presets apply ONLY there — never when source_note is live/cache.
+    source_note = str(nessie_payload.get("source_note") or "").strip().lower()
     demo_label = nessie_payload.get("demo_label")
-    customer_id = str(nessie_payload.get("customer_id") or "")
-    if demo_label is None:
+    if demo_label is None and source_note in {"fallback", "fixture"}:
+        customer_id = str(nessie_payload.get("customer_id") or "")
         if customer_id.endswith("001") or customer_id == "nessie-demo-001":
             demo_label = "stable"
         elif customer_id.endswith("002") or customer_id == "nessie-demo-002":
@@ -131,17 +163,7 @@ def build_financial_context(nessie_payload: dict) -> FinancialContext:
             financial_stress="MEDIUM",
         ),
     }
-    if demo_label in presets:
+    if source_note in {"fallback", "fixture"} and demo_label in presets:
         return presets[demo_label]
 
-    return FinancialContext(
-        monthly_income=round(monthly_income, 2),
-        fixed_expenses=round(fixed, 2),
-        variable_spending=round(variable, 2),
-        monthly_free_cashflow=round(monthly_free_cashflow, 2),
-        cash_reserve=round(cash_reserve, 2),
-        safe_mobility_budget=round(safe_mobility_budget, 2),
-        emergency_runway_months=emergency_runway_months,
-        debt_burden_ratio=debt_burden_ratio,
-        financial_stress=stress,
-    )
+    return derived

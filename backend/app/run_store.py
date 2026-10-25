@@ -30,9 +30,40 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
+# Persisted inside metrics_json without a schema migration.
+_TASK_STATES_KEY = "__task_states__"
+
 _lock = threading.Lock()
 _runs: dict[str, RunStatusResponse] = {}
 _run_team_names: dict[str, str] = {}
+
+
+def _metrics_payload(run: RunStatusResponse) -> dict:
+    payload = run.metrics.model_dump()
+    payload[_TASK_STATES_KEY] = [t.model_dump(mode="json") for t in run.tasks]
+    return payload
+
+
+def _parse_metrics_payload(raw: object) -> tuple[RunMetrics, Optional[list[RunTaskState]]]:
+    if not isinstance(raw, dict):
+        return RunMetrics(), None
+    task_raw = raw.get(_TASK_STATES_KEY)
+    metrics_data = {k: v for k, v in raw.items() if k != _TASK_STATES_KEY}
+    try:
+        metrics = RunMetrics.model_validate(metrics_data)
+    except Exception:
+        metrics = RunMetrics()
+    tasks: Optional[list[RunTaskState]] = None
+    if isinstance(task_raw, list):
+        parsed: list[RunTaskState] = []
+        for item in task_raw:
+            try:
+                parsed.append(RunTaskState.model_validate(item))
+            except Exception:
+                continue
+        if parsed:
+            tasks = parsed
+    return metrics, tasks
 
 
 def _utcnow() -> str:
@@ -329,30 +360,32 @@ def _hydrate_run_from_db(run_id: str) -> Optional[RunStatusResponse]:
             except Exception:
                 plan = ExecutionPlan(tasks=[])
 
-            tasks: list[RunTaskState] = []
-            for t in plan.tasks:
-                tasks.append(
-                    RunTaskState(
-                        id=t.id,
-                        name=t.name,
-                        assigned_agent_id=t.assigned_agent_id,
-                        executor=t.executor,
-                        action=t.action,
-                        status=TaskStatus.COMPLETED
-                        if row.status == RunStatus.COMPLETED.value
-                        else TaskStatus.WAITING,
-                        depends_on=list(t.depends_on),
-                        risk_level=t.risk_level,
-                        activity_summary="Restored from persisted run.",
+            metrics, persisted_tasks = _parse_metrics_payload(row.metrics_json)
+            if persisted_tasks is not None:
+                tasks = persisted_tasks
+            else:
+                # Legacy rows: approximate from plan + terminal status only.
+                tasks = []
+                for t in plan.tasks:
+                    tasks.append(
+                        RunTaskState(
+                            id=t.id,
+                            name=t.name,
+                            assigned_agent_id=t.assigned_agent_id,
+                            executor=t.executor,
+                            action=t.action,
+                            status=TaskStatus.COMPLETED
+                            if row.status
+                            in {
+                                RunStatus.COMPLETED.value,
+                                RunStatus.NO_ACTION_NEEDED.value,
+                            }
+                            else TaskStatus.WAITING,
+                            depends_on=list(t.depends_on),
+                            risk_level=t.risk_level,
+                            activity_summary="Restored from persisted run.",
+                        )
                     )
-                )
-
-            metrics = RunMetrics()
-            if isinstance(row.metrics_json, dict):
-                try:
-                    metrics = RunMetrics.model_validate(row.metrics_json)
-                except Exception:
-                    pass
 
             financial = None
             if isinstance(row.financial_context_json, dict):
@@ -586,6 +619,7 @@ def _persist_create(request: CreateRunRequest, run: RunStatusResponse) -> None:
                     customer_id=request.context.customer_id,
                     status=run.status.value,
                     execution_plan_json=run.plan.model_dump(),
+                    metrics_json=_metrics_payload(run),
                     created_at=datetime.now(timezone.utc),
                     updated_at=datetime.now(timezone.utc),
                 )
@@ -612,7 +646,7 @@ def _persist_update(run: RunStatusResponse) -> None:
             row.recommendation_json = (
                 run.recommendation.model_dump() if run.recommendation else ({"portfolio_result":run.portfolio_result.model_dump()} if run.portfolio_result else None)
             )
-            row.metrics_json = run.metrics.model_dump()
+            row.metrics_json = _metrics_payload(run)
             row.updated_at = datetime.now(timezone.utc)
             if run.status in {
                 RunStatus.COMPLETED,

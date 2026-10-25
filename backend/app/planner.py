@@ -250,7 +250,12 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
 
     from app.workflow_support import require_supported_responsibility, require_supported_team
 
-    analysis = require_supported_responsibility(goal, planning=True, answers=request.planning_answers)
+    analysis = require_supported_responsibility(
+        goal,
+        planning=True,
+        answers=request.planning_answers,
+        context_source_ids=list(request.context_source_ids or []),
+    )
 
     work_style = work_style_from_budget_preference(request.budget_preference)
     llm = get_llm_service()

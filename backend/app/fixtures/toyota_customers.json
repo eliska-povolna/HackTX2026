@@ -3,7 +3,7 @@
     "id": "customer-stable",
     "name": "Sarah Miller",
     "scenario_label": "Strong finance + decision soon",
-    "description": "Lease ending soon, strong reserves — classic buy-current mobility case.",
+    "description": "Lease ending soon, strong reserves \u2014 classic buy-current mobility case.",
     "vehicle": {
       "year": 2023,
       "make": "Toyota",
@@ -33,7 +33,7 @@
     "id": "customer-stressed",
     "name": "Jordan Lee",
     "scenario_label": "Weak finance + decision soon",
-    "description": "Same lease window as Sarah, thinner buffer — return often wins.",
+    "description": "Same lease window as Sarah, thinner buffer \u2014 return often wins.",
     "vehicle": {
       "year": 2023,
       "make": "Toyota",
@@ -63,7 +63,7 @@
     "id": "customer-no-action",
     "name": "Alex Kim",
     "scenario_label": "No action needed",
-    "description": "Lease far from maturity and usage stable — relevance gate stops early.",
+    "description": "Lease far from maturity and usage stable \u2014 relevance gate stops early.",
     "vehicle": {
       "year": 2023,
       "make": "Toyota",
@@ -85,7 +85,7 @@
       "estimated_vehicle_value": 27500,
       "estimated_upgrade_payment": 560
     },
-    "nessie_customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709",
+    "nessie_customer_id": "8a78f5c6-4fdf-4c2b-8083-e10e4f077047",
     "nessie_provenance": "NESSIE_LIVE",
     "demo_finance_label": "stable"
   },
@@ -93,7 +93,7 @@
     "id": "customer-loan-strong",
     "name": "Priya Shah",
     "scenario_label": "Strong loan candidate",
-    "description": "High usage Camry owner with strong cashflow — good new-vehicle loan target.",
+    "description": "High usage Camry owner with strong cashflow \u2014 good new-vehicle loan target.",
     "vehicle": {
       "year": 2019,
       "make": "Toyota",
@@ -115,15 +115,15 @@
       "estimated_vehicle_value": 16500,
       "estimated_upgrade_payment": 520
     },
-    "nessie_customer_id": "nessie-demo-loan-strong",
-    "nessie_provenance": "SYNTHETIC_ONLY",
+    "nessie_customer_id": "afadfb0a-adc0-4497-92c7-2d19c4302cad",
+    "nessie_provenance": "NESSIE_LIVE",
     "demo_finance_label": "loan_strong"
   },
   {
     "id": "customer-loan-weak",
     "name": "Marcus Nguyen",
     "scenario_label": "Poor loan candidate",
-    "description": "Thin reserves and high debt burden — weak loan eligibility.",
+    "description": "Thin reserves and high debt burden \u2014 weak loan eligibility.",
     "vehicle": {
       "year": 2018,
       "make": "Toyota",
@@ -145,15 +145,15 @@
       "estimated_vehicle_value": 11000,
       "estimated_upgrade_payment": 480
     },
-    "nessie_customer_id": "nessie-demo-loan-weak",
-    "nessie_provenance": "SYNTHETIC_ONLY",
+    "nessie_customer_id": "521f2bfe-f832-4343-88df-74f0296fbede",
+    "nessie_provenance": "NESSIE_LIVE",
     "demo_finance_label": "loan_weak"
   },
   {
     "id": "customer-high-usage",
     "name": "Elena Rossi",
     "scenario_label": "High usage + decision soon",
-    "description": "Lease ending with sharply higher mileage — mobility decision with upgrade pressure.",
+    "description": "Lease ending with sharply higher mileage \u2014 mobility decision with upgrade pressure.",
     "vehicle": {
       "year": 2022,
       "make": "Toyota",
@@ -175,15 +175,15 @@
       "estimated_vehicle_value": 33500,
       "estimated_upgrade_payment": 640
     },
-    "nessie_customer_id": "nessie-demo-high-usage",
-    "nessie_provenance": "SYNTHETIC_ONLY",
+    "nessie_customer_id": "867b3db9-20bf-4ae5-9f6b-ab9d1f283c12",
+    "nessie_provenance": "NESSIE_LIVE",
     "demo_finance_label": "medium"
   },
   {
     "id": "customer-mid-lease",
     "name": "Chris Patel",
     "scenario_label": "Mid-lease medium stress",
-    "description": "Moderate runway and mid lease — often not urgent for mobility action.",
+    "description": "Moderate runway and mid lease \u2014 often not urgent for mobility action.",
     "vehicle": {
       "year": 2024,
       "make": "Toyota",
@@ -205,8 +205,8 @@
       "estimated_vehicle_value": 24800,
       "estimated_upgrade_payment": 455
     },
-    "nessie_customer_id": "nessie-demo-medium",
-    "nessie_provenance": "SYNTHETIC_ONLY",
+    "nessie_customer_id": "fc2e87e7-3604-491d-a3ff-1a93a4090d28",
+    "nessie_provenance": "NESSIE_LIVE",
     "demo_finance_label": "medium"
   }
 ]
