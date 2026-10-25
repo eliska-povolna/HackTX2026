@@ -1,0 +1,88 @@
+{
+  "customers": {
+    "nessie-demo-001": {
+      "customer_id": "nessie-demo-001",
+      "label": "stable",
+      "first_name": "Sarah",
+      "last_name": "Miller",
+      "accounts": [
+        {
+          "id": "acc-stable-checking",
+          "type": "Checking",
+          "balance": 3200.0,
+          "nickname": "Primary Checking"
+        },
+        {
+          "id": "acc-stable-savings",
+          "type": "Savings",
+          "balance": 5800.0,
+          "nickname": "Emergency Savings"
+        }
+      ],
+      "deposits": [
+        {"amount": 4850.0, "description": "PAYROLL ACME CORP", "medium": "balance", "month_offset": 0},
+        {"amount": 4850.0, "description": "PAYROLL ACME CORP", "medium": "balance", "month_offset": 1},
+        {"amount": 4850.0, "description": "PAYROLL ACME CORP", "medium": "balance", "month_offset": 2}
+      ],
+      "purchases": [
+        {"amount": 1850.0, "description": "RENT", "category": "housing", "merchant": "Property Mgmt", "fixed": true},
+        {"amount": 400.0, "description": "AUTO INSURANCE", "category": "insurance", "merchant": "InsureCo", "fixed": true},
+        {"amount": 469.0, "description": "TOYOTA LEASE", "category": "auto", "merchant": "Toyota Financial", "fixed": true},
+        {"amount": 120.0, "description": "GROCERIES", "category": "food", "merchant": "HEB", "fixed": false},
+        {"amount": 85.0, "description": "GAS", "category": "transport", "merchant": "Shell", "fixed": false},
+        {"amount": 65.0, "description": "UTILITIES", "category": "utilities", "merchant": "Austin Energy", "fixed": false},
+        {"amount": 45.0, "description": "STREAMING", "category": "entertainment", "merchant": "Netflix", "fixed": false},
+        {"amount": 95.0, "description": "DINING", "category": "food", "merchant": "Local Bistro", "fixed": false},
+        {"amount": 40.0, "description": "PHARMACY", "category": "health", "merchant": "CVS", "fixed": false},
+        {"amount": 150.0, "description": "MISC", "category": "other", "merchant": "Amazon", "fixed": false},
+        {"amount": 180.0, "description": "CLOTHING", "category": "shopping", "merchant": "Target", "fixed": false},
+        {"amount": 120.0, "description": "COFFEE/LUNCH", "category": "food", "merchant": "Various", "fixed": false}
+      ],
+      "loans": [
+        {"monthly_payment": 220.0, "balance": 4800.0, "type": "student"}
+      ]
+    },
+    "nessie-demo-002": {
+      "customer_id": "nessie-demo-002",
+      "label": "stressed",
+      "first_name": "Jordan",
+      "last_name": "Lee",
+      "accounts": [
+        {
+          "id": "acc-stressed-checking",
+          "type": "Checking",
+          "balance": 650.0,
+          "nickname": "Primary Checking"
+        },
+        {
+          "id": "acc-stressed-savings",
+          "type": "Savings",
+          "balance": 450.0,
+          "nickname": "Savings"
+        }
+      ],
+      "deposits": [
+        {"amount": 4850.0, "description": "PAYROLL ACME CORP", "medium": "balance", "month_offset": 0},
+        {"amount": 4850.0, "description": "PAYROLL ACME CORP", "medium": "balance", "month_offset": 1},
+        {"amount": 4850.0, "description": "PAYROLL ACME CORP", "medium": "balance", "month_offset": 2}
+      ],
+      "purchases": [
+        {"amount": 2100.0, "description": "RENT", "category": "housing", "merchant": "Property Mgmt", "fixed": true},
+        {"amount": 420.0, "description": "AUTO INSURANCE", "category": "insurance", "merchant": "InsureCo", "fixed": true},
+        {"amount": 469.0, "description": "TOYOTA LEASE", "category": "auto", "merchant": "Toyota Financial", "fixed": true},
+        {"amount": 111.0, "description": "PHONE+INTERNET", "category": "utilities", "merchant": "AT&T", "fixed": true},
+        {"amount": 180.0, "description": "GROCERIES", "category": "food", "merchant": "HEB", "fixed": false},
+        {"amount": 140.0, "description": "GAS", "category": "transport", "merchant": "Shell", "fixed": false},
+        {"amount": 95.0, "description": "UTILITIES", "category": "utilities", "merchant": "Austin Energy", "fixed": false},
+        {"amount": 85.0, "description": "DINING", "category": "food", "merchant": "Fast Food", "fixed": false},
+        {"amount": 120.0, "description": "MEDICAL", "category": "health", "merchant": "Clinic", "fixed": false},
+        {"amount": 200.0, "description": "CREDIT CARD MIN", "category": "debt", "merchant": "Chase", "fixed": false},
+        {"amount": 110.0, "description": "MISC", "category": "other", "merchant": "Amazon", "fixed": false},
+        {"amount": 120.0, "description": "SUBSCRIPTIONS", "category": "entertainment", "merchant": "Various", "fixed": false}
+      ],
+      "loans": [
+        {"monthly_payment": 380.0, "balance": 9200.0, "type": "personal"}
+      ]
+    }
+  }
+}
