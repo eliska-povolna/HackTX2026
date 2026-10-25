@@ -1,18 +1,22 @@
-"""QuestMaster FastAPI application — Phase 1 endpoints."""
+"""QuestMaster FastAPI application — Phase 1 + Phase 2 run execution."""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.db import init_db
+from app.executor import build_toyota_execution_plan, execute_run
 from app.models import (
+    CreateRunRequest,
+    CreateRunResponse,
     DemoCustomerDetail,
     DemoCustomerSummary,
     DemoCustomersResponse,
@@ -21,10 +25,14 @@ from app.models import (
     HealthResponse,
     PlanTeamRequest,
     PlanTeamResponse,
+    RunStatus,
+    RunStatusResponse,
     Template,
     TemplatesResponse,
 )
 from app.planner import plan_team as plan_team_orchestrator
+from app.run_store import create_run_record, get_run
+from app.tools.toyota import load_toyota_customers
 
 # Repo-root .env (HackTX2026/.env), not backend/.env
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,10 +42,14 @@ load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
-CUSTOMERS_PATH = FIXTURES_DIR / "toyota_customers.json"
 
-app = FastAPI(title="QuestMaster API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="QuestMaster API", version="0.2.0", lifespan=lifespan)
 
 _cors_origins = [
     o.strip()
@@ -51,11 +63,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def _load_customers() -> list[dict]:
-    with CUSTOMERS_PATH.open(encoding="utf-8") as f:
-        return json.load(f)
 
 
 def _error(status_code: int, code: str, message: str, recoverable: bool = True) -> JSONResponse:
@@ -82,7 +89,7 @@ async def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         service="questmaster-api",
-        version="0.1.0",
+        version="0.2.0",
     )
 
 
@@ -110,7 +117,7 @@ async def templates() -> TemplatesResponse:
 
 @app.get("/api/demo/customers", response_model=DemoCustomersResponse)
 async def list_demo_customers() -> DemoCustomersResponse:
-    customers = _load_customers()
+    customers = load_toyota_customers()
     summaries = []
     for c in customers:
         vehicle = c["vehicle"]
@@ -129,7 +136,7 @@ async def list_demo_customers() -> DemoCustomersResponse:
 
 @app.get("/api/demo/customers/{customer_id}", response_model=DemoCustomerDetail)
 async def get_demo_customer(customer_id: str) -> DemoCustomerDetail:
-    customers = _load_customers()
+    customers = load_toyota_customers()
     match = next((c for c in customers if c["id"] == customer_id), None)
     if match is None:
         raise HTTPException(
@@ -153,3 +160,47 @@ async def get_demo_customer(customer_id: str) -> DemoCustomerDetail:
 @app.post("/api/teams/plan", response_model=PlanTeamResponse)
 async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
     return await plan_team_orchestrator(request)
+
+
+@app.post("/api/runs", response_model=CreateRunResponse, status_code=202)
+async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> CreateRunResponse:
+    # Validate customer exists
+    customers = load_toyota_customers()
+    if not any(c["id"] == request.context.customer_id for c in customers):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": "Customer ID is required and must be a known demo customer.",
+                "recoverable": True,
+            },
+        )
+    if not request.team.agents:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": "Team must include at least one agent.",
+                "recoverable": True,
+            },
+        )
+
+    plan = build_toyota_execution_plan(request.team)
+    run = create_run_record(request, plan)
+    background.add_task(execute_run, run.run_id, request)
+    return CreateRunResponse(run_id=run.run_id, status=RunStatus.PLANNING)
+
+
+@app.get("/api/runs/{run_id}", response_model=RunStatusResponse)
+async def get_run_status(run_id: str) -> RunStatusResponse:
+    run = get_run(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NOT_FOUND",
+                "message": f"Run '{run_id}' not found.",
+                "recoverable": True,
+            },
+        )
+    return run

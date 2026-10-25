@@ -274,3 +274,79 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+# --- Runs (API_SPEC §9–11) ---
+
+
+class RunContext(BaseModel):
+    customer_id: str
+
+
+class CreateRunRequest(BaseModel):
+    goal: str
+    team: TeamDefinition
+    context: RunContext
+    quality_mode: QualityMode = QualityMode.normal
+
+
+class CreateRunResponse(BaseModel):
+    run_id: str
+    status: RunStatus
+
+
+class RunTaskState(BaseModel):
+    id: str
+    name: str
+    assigned_agent_id: str
+    executor: ExecutorType
+    action: str
+    status: TaskStatus
+    activity_summary: str = ""
+    tool: Optional[str] = None
+    duration_ms: Optional[int] = None
+    cost_usd: float = 0.0
+    data_source: Optional[str] = None
+    depends_on: list[str] = Field(default_factory=list)
+    risk_level: RiskLevel = RiskLevel.medium
+
+
+class RunMetrics(BaseModel):
+    llm_calls: int = 0
+    llm_calls_avoided: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_ai_cost_usd: float = 0.0
+    estimated_baseline_cost_usd: float = 0.0
+    estimated_cost_saved_usd: float = 0.0
+    code_tasks: int = 0
+    tool_tasks: int = 0
+    llm_tasks: int = 0
+
+
+class OutputItem(BaseModel):
+    id: str
+    title: str
+    agent_id: Optional[str] = None
+    type: str
+    summary: str
+    content: str
+    timestamp: str
+    cost_usd: float = 0.0
+    source_type: str = "CODE"
+
+
+class RunStatusResponse(BaseModel):
+    run_id: str
+    status: RunStatus
+    goal: str
+    created_at: str
+    updated_at: str
+    plan: ExecutionPlan
+    tasks: list[RunTaskState]
+    metrics: RunMetrics
+    financial_context: Optional[FinancialContext] = None
+    recommendation: Optional[ToyotaRecommendation] = None
+    outputs: list[OutputItem] = Field(default_factory=list)
+    evaluators: list[EvaluatorResult] = Field(default_factory=list)
+    audit_events: list[AuditEvent] = Field(default_factory=list)
