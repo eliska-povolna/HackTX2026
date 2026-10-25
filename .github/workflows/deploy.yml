@@ -22,29 +22,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Secrets sometimes contain quotes, whitespace, or https:// — sanitize.
-          HOST="$(printf '%s' "$VULTR_HOST" | tr -d '\r' | xargs)"
+          # Strip BOM / CR / quotes / scheme that often sneak into GitHub secrets.
+          HOST="$(printf '%s' "$VULTR_HOST" | sed $'s/^\xEF\xBB\xBF//' | tr -d '\r' | xargs || true)"
           HOST="${HOST#https://}"
           HOST="${HOST#http://}"
           HOST="${HOST%%/*}"
-          HOST="${HOST%\"}"
-          HOST="${HOST#\"}"
-          HOST="${HOST%\'}"
-          HOST="${HOST#\'}"
+          HOST="${HOST//\"/}"
+          HOST="${HOST//\'/}"
 
-          USER="$(printf '%s' "$VULTR_USER" | tr -d '\r' | xargs)"
-          USER="${USER%\"}"
-          USER="${USER#\"}"
-          USER="${USER%\'}"
-          USER="${USER#\'}"
+          USER="$(printf '%s' "$VULTR_USER" | sed $'s/^\xEF\xBB\xBF//' | tr -d '\r' | xargs || true)"
+          USER="${USER//\"/}"
+          USER="${USER//\'/}"
+          USER="${USER%%@*}"
 
-          if [[ ! "$HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
-            echo "VULTR_HOST is invalid after sanitizing. Use only the IP or hostname, e.g. 64.177.49.126" >&2
-            echo "HOST_LENGTH=${#HOST}" >&2
+          echo "HOST_LENGTH=${#HOST}"
+          echo "USER_LENGTH=${#USER}"
+          printf 'HOST_HEX='
+          printf '%s' "$HOST" | od -An -tx1 | tr -s ' ' | head -c 200
+          echo
+          printf 'USER_HEX='
+          printf '%s' "$USER" | od -An -tx1 | tr -s ' ' | head -c 200
+          echo
+
+          if [[ -z "$HOST" || ! "$HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo "VULTR_HOST is invalid. Expected bare IP/hostname like 64.177.49.126" >&2
+            echo "Common mistakes: pasted SSH key into VULTR_HOST, quotes, https://, spaces, BOM" >&2
             exit 1
           fi
-          if [[ -z "$USER" ]]; then
-            echo "VULTR_USER is empty" >&2
+          if [[ -z "$USER" || ! "$USER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "VULTR_USER is invalid. Expected username only (no user@host)." >&2
             exit 1
           fi
           echo "Deploy target user=$USER host=$HOST"
