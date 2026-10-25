@@ -1352,12 +1352,7 @@ async def _llm_simple_play(
                 "Response: acknowledged and finished in one short play/response turn "
                 "without external connectors."
             )
-        if used_real:
-            text += (
-                "\n\n(Model call succeeded but returned an empty message body; "
-                "showing this scripted result so Quest Rewards stays populated.)"
-            )
-        else:
+        if not used_real:
             text = f"[dev fallback]\n{text}"
 
     if used_real:
