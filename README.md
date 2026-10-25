@@ -180,7 +180,8 @@ With Toyota context sources enabled, ambiguous customer/vehicle goals prefer the
 | **Save Team** | Persists the current team + policy to Tiger (`POST /api/teams`). Does not start a run. |
 | **Run Team** | `POST /api/runs` (202) then polls status. Mobility needs Toyota context; portfolio needs Nessie; **simple_play** runs without Toyota chips. |
 | **Check Trigger** | `POST /api/triggers/mobility/evaluate` with `start_run_if_relevant=false`. Cheap CODE relevance only (lease window / usage swing). Does **not** call Nessie or LLM and does not start a run in the UI. |
-| **Decision Trace / Quest Log** | Per-run audit events (route, permissions, model, LLM). Scrollable panel on Create. Full history is on Activity. |
+| **Decision Trace / Quest Log** | Per-run audit events (route, permissions, model, LLM). Scrollable panel on Create. Full history is on Activity. Timestamps are stored in **UTC** on the server and shown in the **browser’s local timezone** (they are real run times, not mock clocks). |
+| **Reports** | Lists past runs from `GET /api/runs`. Click a row to reload that run’s full detail (`GET /api/runs/{id}`) without leaving the page. |
 | **Configure agent** | Edits tools, scopes, actions, budgets, instructions. Runtime enforces them; missing grants → `PERMISSION_DENIED`, never silent repair. |
 
 ---

@@ -21,6 +21,17 @@ def test_rps_goal_classifies_as_simple_play():
     assert analysis.workflow_kind.value == "simple_play"
 
 
+def test_italy_affordability_is_simple_play_even_with_toyota_chips():
+    from app.job_analysis import analyze_job
+
+    analysis = analyze_job(
+        "Zjisti jestli si zákazník může dovolit trip do Itálie",
+        context_source_ids=["toyota_customer", "nessie_banking"],
+    )
+    assert analysis.execution_status.value == "READY"
+    assert analysis.workflow_kind.value == "simple_play"
+
+
 def test_recruiting_still_needs_setup():
     from app.job_analysis import analyze_job
 

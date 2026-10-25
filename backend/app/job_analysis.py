@@ -144,15 +144,53 @@ def _detect_workflow(
         return WorkflowKind.MOBILITY_DECISION
     if loan_hits >= 1 and mobility_hits >= 1:
         return WorkflowKind.AMBIGUOUS
+
+    # Freeform affordability / travel / games — not the Toyota lease pack.
+    # Keep these as simple_play even if Toyota chips are still toggled on.
+    simple_hits = sum(
+        1
+        for t in (
+            "rock-paper-scissors",
+            "rock paper scissors",
+            "kámen nůžky",
+            "kamen nuzky",
+            "trip to",
+            "afford",
+            "dovolit",
+            "italy",
+            "itálie",
+            "italie",
+            "brainstorm",
+            "roleplay",
+            "role-play",
+            "play one",
+            "zahraj",
+        )
+        if t in g
+    )
+    if simple_hits >= 1:
+        return WorkflowKind.UNSUPPORTED  # maps to simple_play READY below
+
     # Demo UI enables Toyota/Nessie sources for the installed pack. Prefer the
     # runnable mobility workflow over a dead-end "unsupported" assemble error.
     if _toyota_sources_enabled(context_source_ids) and (
-        "toyota" in g or "customer" in g or "vehicle" in g or "decide" in g or "recommend" in g
+        "toyota" in g
+        or "customer" in g
+        or "zákazník" in g
+        or "zakaznik" in g
+        or "vehicle" in g
+        or "decide" in g
+        or "recommend" in g
     ):
+        # Pure "can the customer afford X" without lease/mobility language → play.
+        if any(t in g for t in ("afford", "dovolit", "trip", "italy", "itálie", "italie")) and not any(
+            t in g for t in ("lease", "mobility", "buyout", "return the vehicle")
+        ):
+            return WorkflowKind.UNSUPPORTED
         return WorkflowKind.MOBILITY_DECISION
     if "toyota" in g and ("customer" in g or "vehicle" in g or "mobility" in g):
         return WorkflowKind.MOBILITY_DECISION
-    if "toyota" in g or "customer" in g or "vehicle" in g:
+    if "toyota" in g or "customer" in g or "vehicle" in g or "zákazník" in g or "zakaznik" in g:
         return WorkflowKind.AMBIGUOUS
     return WorkflowKind.UNSUPPORTED
 

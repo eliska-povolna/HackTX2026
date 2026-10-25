@@ -448,7 +448,9 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
     # Short legacy stubs ("demo") keep the team's declared workflow. Reclassify
     # only real goals so mobility regressions are not forced into simple_play.
     goal_key = (request.goal or "").strip().lower()
-    if goal_key not in {"", "demo"}:
+    # Trust an already-assembled simple_play team — freeform goals (incl. non-English)
+    # must remain runnable without forcing Toyota mobility rematch.
+    if goal_key not in {"", "demo"} and not is_simple_play:
         analysis = require_supported_responsibility(
             request.goal,
             context_source_ids=list(
