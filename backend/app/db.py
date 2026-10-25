@@ -1,4 +1,4 @@
-"""Optional Tiger Data / PostgreSQL. App starts even when DATABASE_URL is unset."""
+"""Optional Tiger Data / PostgreSQL. App starts even when no DB URL is set."""
 
 from __future__ import annotations
 
@@ -18,12 +18,22 @@ _SessionLocal: Optional[sessionmaker] = None
 db_available: bool = False
 
 
+def _resolve_database_url() -> str:
+    """Prefer TIMESCALE_SERVICE_URL (Tiger/Vultr), fall back to DATABASE_URL."""
+    return (
+        (os.getenv("TIMESCALE_SERVICE_URL") or "").strip()
+        or (os.getenv("DATABASE_URL") or "").strip()
+    )
+
+
 def init_db() -> bool:
-    """Initialize engine/tables when DATABASE_URL is set. Never raises to crash the app."""
+    """Initialize engine/tables when a DB URL is set. Never raises to crash the app."""
     global _engine, _SessionLocal, db_available
-    url = (os.getenv("DATABASE_URL") or "").strip()
+    url = _resolve_database_url()
     if not url:
-        logger.info("DATABASE_URL not set — using in-memory run state only")
+        logger.info(
+            "TIMESCALE_SERVICE_URL/DATABASE_URL not set — using in-memory run state only"
+        )
         db_available = False
         return False
 

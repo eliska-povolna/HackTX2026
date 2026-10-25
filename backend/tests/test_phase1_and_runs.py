@@ -53,6 +53,7 @@ def test_plan_team_fallback(client, monkeypatch):
 
 def test_database_init_without_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("TIMESCALE_SERVICE_URL", raising=False)
     from app import db as db_mod
 
     db_mod._engine = None

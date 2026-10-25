@@ -25,7 +25,7 @@
       "estimated_vehicle_value": 26800,
       "estimated_upgrade_payment": 585
     },
-    "nessie_customer_id": "nessie-demo-001"
+    "nessie_customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709"
   },
   {
     "id": "customer-stressed",
@@ -53,6 +53,6 @@
       "estimated_vehicle_value": 26800,
       "estimated_upgrade_payment": 585
     },
-    "nessie_customer_id": "nessie-demo-002"
+    "nessie_customer_id": "8867eae3-b33d-4fa0-b64a-13d331dceec2"
   }
 ]

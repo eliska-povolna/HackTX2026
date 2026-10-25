@@ -1,0 +1,14 @@
+{
+  "stable": {
+    "customer_id": "b8470c8a-6fde-495f-b1f1-792c771b0709",
+    "checking_id": "0c6e99dc-87d9-49c9-a551-aeb08a249bf7",
+    "savings_id": "4ae8d2d9-32ce-4d06-9416-59732df4767b",
+    "label": "stable"
+  },
+  "stressed": {
+    "customer_id": "8867eae3-b33d-4fa0-b64a-13d331dceec2",
+    "checking_id": "d8f028a0-af69-40ef-955f-b798b9796edd",
+    "savings_id": "8ef55682-0acf-488e-907a-02382bdc4505",
+    "label": "stressed"
+  }
+}

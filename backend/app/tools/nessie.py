@@ -15,15 +15,22 @@ from app.models import DataSource
 logger = logging.getLogger(__name__)
 
 FIXTURES_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "nessie_demo.json"
+LIVE_IDS_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "nessie_live_ids.json"
 
 
-def _ssl_verify() -> bool | str:
+def _ssl_verify_targets() -> list[bool | str]:
+    targets: list[bool | str] = []
     try:
         import certifi
 
-        return certifi.where()
+        targets.append(certifi.where())
     except ImportError:
-        return True
+        pass
+    targets.append(True)
+    app_env = (os.getenv("APP_ENV") or "development").strip().lower()
+    if app_env in {"development", "dev", "local"}:
+        targets.append(False)
+    return targets
 
 
 class NessieClient:
@@ -35,12 +42,36 @@ class NessieClient:
         self.fallback_enabled = (
             os.getenv("NESSIE_FALLBACK_ENABLED") or "true"
         ).strip().lower() in {"1", "true", "yes", "on"}
-        self._fixture = self._load_fixture()
+        self._fixture = self._load_json(FIXTURES_PATH)
+        self._live_ids = self._load_live_ids()
         self._run_cache: dict[str, Any] = {}
 
-    def _load_fixture(self) -> dict:
-        with FIXTURES_PATH.open(encoding="utf-8") as f:
+    @staticmethod
+    def _load_json(path: Path) -> dict:
+        with path.open(encoding="utf-8") as f:
             return json.load(f)
+
+    def _load_live_ids(self) -> dict:
+        if LIVE_IDS_PATH.exists():
+            try:
+                return self._load_json(LIVE_IDS_PATH)
+            except Exception:
+                return {}
+        return {}
+
+    def demo_label_for_customer_id(self, nessie_customer_id: str) -> Optional[str]:
+        """Return 'stable' / 'stressed' for known demo customers (live or fixture)."""
+        if nessie_customer_id in {"nessie-demo-001"} or nessie_customer_id.endswith("001"):
+            if nessie_customer_id.startswith("nessie-demo"):
+                return "stable"
+        if nessie_customer_id in {"nessie-demo-002"} or (
+            nessie_customer_id.startswith("nessie-demo") and nessie_customer_id.endswith("002")
+        ):
+            return "stressed"
+        for label, info in self._live_ids.items():
+            if info.get("customer_id") == nessie_customer_id:
+                return label
+        return None
 
     def clear_run_cache(self) -> None:
         self._run_cache.clear()
@@ -52,6 +83,11 @@ class NessieClient:
         self._run_cache[key] = value
         return value
 
+    def _redact(self, message: str) -> str:
+        if self.api_key:
+            return message.replace(self.api_key, "***")
+        return message
+
     def _get_json(self, path: str, params: Optional[dict] = None) -> Any:
         if not self.api_key:
             raise RuntimeError("NESSIE_API_KEY not configured")
@@ -60,35 +96,37 @@ class NessieClient:
             query.update(params)
         url = f"{self.base_url}{path}"
         last_exc: Exception | None = None
-        for attempt in range(2):
+        for verify in _ssl_verify_targets():
             try:
-                verify: bool | str = _ssl_verify()
-                try:
-                    with httpx.Client(timeout=20.0, verify=verify) as client:
-                        resp = client.get(url, params=query)
-                        resp.raise_for_status()
-                        return resp.json()
-                except Exception as ssl_exc:
-                    if "SSL" in str(ssl_exc).upper() or "CERTIFICATE" in str(ssl_exc).upper():
-                        app_env = (os.getenv("APP_ENV") or "development").lower()
-                        if app_env in {"development", "dev", "local"}:
-                            with httpx.Client(timeout=20.0, verify=False) as client:
-                                resp = client.get(url, params=query)
-                                resp.raise_for_status()
-                                return resp.json()
-                    raise
+                with httpx.Client(timeout=25.0, verify=verify) as client:
+                    resp = client.get(url, params=query)
+                    resp.raise_for_status()
+                    return resp.json()
+            except httpx.HTTPStatusError:
+                raise
             except Exception as exc:
                 last_exc = exc
-                logger.info("Nessie attempt %s failed: %s", attempt + 1, exc)
+                if "CERTIFICATE" in str(exc).upper() or "SSL" in str(exc).upper():
+                    logger.info(
+                        "Nessie TLS attempt failed (verify=%s): %s",
+                        verify,
+                        self._redact(str(exc)),
+                    )
+                    continue
+                raise
         assert last_exc is not None
         raise last_exc
 
     def _fixture_customer(self, nessie_customer_id: str) -> dict:
         customers = self._fixture.get("customers", {})
-        if nessie_customer_id not in customers:
-            # default to stable fixture
+        label = self.demo_label_for_customer_id(nessie_customer_id)
+        if label == "stable":
             return customers["nessie-demo-001"]
-        return customers[nessie_customer_id]
+        if label == "stressed":
+            return customers["nessie-demo-002"]
+        if nessie_customer_id in customers:
+            return customers[nessie_customer_id]
+        return customers["nessie-demo-001"]
 
     def load_customer_financials(self, nessie_customer_id: str) -> tuple[dict, DataSource]:
         """Return aggregated banking payload + source. Never raises if fallback enabled."""
@@ -102,9 +140,11 @@ class NessieClient:
             try:
                 customer = self._get_json(f"/customers/{nessie_customer_id}")
                 accounts = self._get_json(f"/customers/{nessie_customer_id}/accounts")
-                # purchases per account
                 purchases: list[dict] = []
-                account_list = accounts if isinstance(accounts, list) else accounts.get("accounts", [])
+                deposits: list[dict] = []
+                account_list = (
+                    accounts if isinstance(accounts, list) else accounts.get("accounts", [])
+                )
                 for acc in account_list:
                     acc_id = acc.get("_id") or acc.get("id")
                     if not acc_id:
@@ -112,7 +152,26 @@ class NessieClient:
                     try:
                         purch = self._get_json(f"/accounts/{acc_id}/purchases")
                         if isinstance(purch, list):
+                            for p in purch:
+                                desc = (p.get("description") or "").lower()
+                                if any(
+                                    k in desc
+                                    for k in (
+                                        "rent",
+                                        "lease",
+                                        "insurance",
+                                        "loan payment",
+                                        "phone",
+                                    )
+                                ):
+                                    p["fixed"] = True
                             purchases.extend(purch)
+                    except Exception:
+                        pass
+                    try:
+                        deps = self._get_json(f"/accounts/{acc_id}/deposits")
+                        if isinstance(deps, list):
+                            deposits.extend(deps)
                     except Exception:
                         pass
                 data = {
@@ -120,18 +179,19 @@ class NessieClient:
                     "customer": customer,
                     "accounts": account_list,
                     "purchases": purchases,
-                    "deposits": [],
+                    "deposits": deposits,
                     "loans": [],
                     "source_note": "live",
+                    "demo_label": self.demo_label_for_customer_id(nessie_customer_id),
                 }
-                # If live returns empty useful data, fall through to fixture
                 if account_list:
-                    packed = {"data": data}
-                    self._cache_set(cache_key, packed)
+                    self._cache_set(cache_key, {"data": data})
                     return data, DataSource.NESSIE_LIVE
             except Exception as exc:
-                live_error = exc
-                logger.warning("Nessie live failed for %s: %s", nessie_customer_id, exc)
+                live_error = Exception(self._redact(str(exc)))
+                logger.warning(
+                    "Nessie live failed for %s: %s", nessie_customer_id, live_error
+                )
 
         if not self.fallback_enabled and live_error:
             raise live_error
@@ -148,6 +208,8 @@ class NessieClient:
             "deposits": fixture.get("deposits", []),
             "loans": fixture.get("loans", []),
             "source_note": "fallback",
+            "demo_label": fixture.get("label")
+            or self.demo_label_for_customer_id(nessie_customer_id),
         }
         self._cache_set(cache_key, {"data": data})
         return data, DataSource.NESSIE_FALLBACK
