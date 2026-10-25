@@ -21,14 +21,43 @@ jobs:
           VULTR_USER: ${{ secrets.VULTR_USER }}
         run: |
           set -euo pipefail
+
+          # Secrets sometimes contain quotes, whitespace, or https:// — sanitize.
+          HOST="$(printf '%s' "$VULTR_HOST" | tr -d '\r' | xargs)"
+          HOST="${HOST#https://}"
+          HOST="${HOST#http://}"
+          HOST="${HOST%%/*}"
+          HOST="${HOST%\"}"
+          HOST="${HOST#\"}"
+          HOST="${HOST%\'}"
+          HOST="${HOST#\'}"
+
+          USER="$(printf '%s' "$VULTR_USER" | tr -d '\r' | xargs)"
+          USER="${USER%\"}"
+          USER="${USER#\"}"
+          USER="${USER%\'}"
+          USER="${USER#\'}"
+
+          if [[ ! "$HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo "VULTR_HOST is invalid after sanitizing. Use only the IP or hostname, e.g. 64.177.49.126" >&2
+            echo "HOST_LENGTH=${#HOST}" >&2
+            exit 1
+          fi
+          if [[ -z "$USER" ]]; then
+            echo "VULTR_USER is empty" >&2
+            exit 1
+          fi
+          echo "Deploy target user=$USER host=$HOST"
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          # Keep PEM newlines intact; tolerate secrets pasted with literal \n.
+          printf '%s\n' "$SSH_PRIVATE_KEY" | sed 's/\r$//' | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$VULTR_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
 
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
-            "$VULTR_USER@$VULTR_HOST" 'bash -s' <<'EOF'
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$USER@$HOST" 'bash -s' <<'EOF'
           set -euo pipefail
           cd /opt/questmaster/HackTX2026
           git fetch origin main
