@@ -49,7 +49,7 @@ def test_plan_team_errors_when_unconfigured_in_any_mode(monkeypatch):
         r = client.post(
             "/api/teams/plan",
             json={
-                "goal": "Plan a hospitality research team for guest feedback",
+                "goal": "Recommend the next mobility decision for one Toyota customer",
                 "max_team_size": 3,
                 "budget_preference": "balanced",
             },

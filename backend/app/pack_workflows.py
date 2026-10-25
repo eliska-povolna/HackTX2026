@@ -117,6 +117,7 @@ def build_team_for_job(analysis: JobAnalysis, goal: str) -> TeamDefinition:
                     "load_toyota_portfolio",
                     "load_toyota_customer",
                     "evaluate_mobility_relevance",
+                    "filter_mobility_portfolio",
                 ],
                 permissions=AgentPermissions(
                     data_scopes=[
@@ -187,6 +188,7 @@ def build_team_for_job(analysis: JobAnalysis, goal: str) -> TeamDefinition:
                         *agents[0].allowed_tools,
                         "load_toyota_portfolio",
                         "evaluate_mobility_relevance",
+                    "filter_mobility_portfolio",
                     ]
                 )
             )
@@ -257,23 +259,42 @@ def build_pack_execution_plan(
 
     team = ensure_team_runtime_config(team)
     agents = {a.id: a for a in team.agents}
-    # Prefer role-like ids
-    financial_id = next((a.id for a in team.agents if "financial" in a.id), team.agents[0].id)
-    decision_id = next(
-        (a.id for a in team.agents if "decision" in a.id),
-        team.agents[-1].id,
-    )
-    context_id = next(
-        (a.id for a in team.agents if "context" in a.id),
-        financial_id,
-    )
+    if not nessie_enabled(enabled):
+        raise ValueError("Nessie banking context is required for portfolio financial decisions.")
 
+    def assignee(action):
+        from app.permissions import PermissionDenied, validate_task_permissions
+        matches = []
+        denied = []
+        for agent in team.agents:
+            if action == "explain_shortlist" and "nessie_raw_financial" in agent.permissions.data_scopes:
+                continue
+            try:
+                validate_task_permissions(agent, action)
+                matches.append(agent.id)
+            except PermissionDenied as exc:
+                from app.permissions import ACTION_REQUIREMENTS
+                overlap = len(set(agent.allowed_tools) & set(ACTION_REQUIREMENTS[action].tools))
+                denied.append((-overlap, agent.id, exc))
+        if not matches:
+            if denied:
+                raise sorted(denied, key=lambda row: (row[0], row[1]))[0][2]
+            raise ValueError(f"No agent is authorized for '{action}'.")
+        return sorted(matches)[0]
+
+    financial_id = assignee("build_portfolio_financials")
+    decision_id = assignee("explain_shortlist")
+    context_id = assignee("load_toyota_portfolio")
+    if "nessie_raw_financial" in agents[decision_id].permissions.data_scopes:
+        raise ValueError("The explanation agent cannot hold raw banking scope; review its plan-time grants.")
+    if financial_id == decision_id:
+        raise ValueError("Financial raw-data work and shortlist explanation require separate agents.")
     if kind == WorkflowKind.LOAN_OPPORTUNITY.value:
         tasks = [
             _task(
                 task_id="load-portfolio",
                 name="Load Toyota portfolio",
-                agent_id=financial_id,
+                agent_id=context_id,
                 action="load_toyota_portfolio",
                 agents=agents,
                 depends_on=[],
@@ -300,7 +321,7 @@ def build_pack_execution_plan(
                 _task(
                     task_id="rank-loan-candidates",
                     name="Rank loan candidates",
-                    agent_id=decision_id,
+                    agent_id=assignee("rank_customers"),
                     action="rank_customers",
                     agents=agents,
                     depends_on=dep,
@@ -333,7 +354,7 @@ def build_pack_execution_plan(
         _task(
             task_id="filter-relevant",
             name="Filter mobility-relevant customers",
-            agent_id=context_id,
+            agent_id=assignee("filter_mobility_portfolio"),
             action="filter_mobility_portfolio",
             agents=agents,
             depends_on=["load-portfolio"],
@@ -360,7 +381,7 @@ def build_pack_execution_plan(
             _task(
                 task_id="rank-mobility",
                 name="Rank mobility priorities",
-                agent_id=decision_id,
+                agent_id=assignee("rank_customers"),
                 action="rank_customers",
                 agents=agents,
                 depends_on=dep,

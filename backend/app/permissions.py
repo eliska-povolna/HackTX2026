@@ -143,13 +143,10 @@ def check_data_scope(agent: AgentDefinition, scope: str) -> PermissionDecision:
 
 def agent_allows_integration(agent: AgentDefinition, integration: str) -> bool:
     """
-    Empty allowed_integrations → backward-compatible (no explicit restriction).
-    Non-empty list → only named integrations are permitted.
+    Only explicitly named integrations are permitted. An empty list grants none.
     Secret values are never stored on the agent.
     """
     allowed = list(getattr(agent, "allowed_integrations", None) or [])
-    if not allowed:
-        return True
     return integration in allowed
 
 

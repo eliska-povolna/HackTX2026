@@ -282,7 +282,7 @@ def test_denied_agent_cannot_run_nessie(client, monkeypatch):
     plan = build_toyota_execution_plan(team)
     err = validate_plan_permissions({a.id: a for a in team.agents}, plan.tasks)
     assert err is not None
-    # create_run restores the Toyota grant before the run starts.
+    # Runtime must never restore a removed grant.
     r = client.post(
         "/api/runs",
         json={
@@ -292,4 +292,5 @@ def test_denied_agent_cannot_run_nessie(client, monkeypatch):
             "quality_mode": "normal",
         },
     )
-    assert r.status_code == 202, r.text
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "PERMISSION_DENIED"

@@ -59,7 +59,7 @@ def test_plan_team_errors_when_llm_unavailable(client, monkeypatch):
     llm_mod._llm_service = None
     r = client.post(
         "/api/teams/plan",
-        json={"goal": "Toyota next move", "max_team_size": 5, "budget_preference": "balanced"},
+        json={"goal": "Recommend the next mobility decision for one Toyota customer", "max_team_size": 5, "budget_preference": "balanced"},
     )
     assert r.status_code == 503
     body = r.json()

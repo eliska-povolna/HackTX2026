@@ -138,8 +138,7 @@ def test_runtime_does_not_repair_stripped_permissions(client, monkeypatch):
             a.allowed_tools = [t for t in a.allowed_tools if "nessie" not in t]
             a.allowed_integrations = []
 
-    # Unrepaired validation still denies. create_run aligns the Toyota pack
-    # before execution so the submitted copy can run; the caller's object is not mutated.
+    # The API must enforce the submitted grants, not repair them.
     result = validate_team_against_workflow(team, repair=False)
     assert not result.ok
     stripped = next(a.allowed_tools for a in team.agents if a.id == "financial-agent")
@@ -153,7 +152,8 @@ def test_runtime_does_not_repair_stripped_permissions(client, monkeypatch):
             "quality_mode": "normal",
         },
     )
-    assert r.status_code == 202, r.text
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "PERMISSION_DENIED"
     assert next(a.allowed_tools for a in team.agents if a.id == "financial-agent") == stripped
 
 
@@ -280,12 +280,12 @@ def test_scope_alias_and_empty_actions():
     agent = normalized.agents[0]
     assert "nessie_raw_financial" in agent.permissions.data_scopes
     assert "customer_financials" not in agent.permissions.data_scopes
-    assert agent.permissions.actions == ["read"]
+    assert agent.permissions.actions == []
     # Original object is not rewritten in place.
     assert team.agents[0].permissions.actions == []
 
 
-def test_weak_team_runs_without_manual_repair(client, monkeypatch):
+def test_weak_team_is_denied_without_plan_time_repair(client, monkeypatch):
     monkeypatch.setenv("META_API_KEY", "")
     import app.services.llm_service as llm_mod
 
@@ -305,12 +305,5 @@ def test_weak_team_runs_without_manual_repair(client, monkeypatch):
                 "quality_mode": "normal",
             },
         )
-        assert r.status_code == 202, (customer_id, r.text)
-        body = _wait_run(client, r.json()["run_id"])
-        assert body["status"] == expected_status, (customer_id, body["status"], body.get("recommendation"))
-        if expected_status == "NO_ACTION_NEEDED":
-            assert body["metrics"]["llm_calls"] == 0
-            assert not any(
-                t.get("action") == "nessie_load_customer_financials" and t.get("status") == "COMPLETED"
-                for t in body.get("tasks", [])
-            )
+        assert r.status_code == 400, (customer_id, r.text)
+        assert r.json()["error"]["code"] == "PERMISSION_DENIED"

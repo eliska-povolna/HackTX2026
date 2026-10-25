@@ -64,6 +64,11 @@ from app.tools.toyota import load_toyota_customer
 logger = logging.getLogger(__name__)
 
 
+class BudgetLimitError(RuntimeError):
+    """A configured server, team or agent ceiling prevented model work."""
+
+
+
 def _task(
     *,
     task_id: str,
@@ -338,12 +343,11 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
     """Background execution for one run."""
     request.team = ensure_team_runtime_config(request.team)
     source_ids = _merged_context_source_ids(request)
-    relevant = mobility_relevant(request.context.customer_id)
-    plan = build_toyota_execution_plan(
-        request.team,
-        context_source_ids=source_ids or None,
-        include_downstream=relevant,
-    )
+    from app.pack_workflows import build_pack_execution_plan
+    if request.team.policy and request.team.policy.scope == "portfolio":
+        plan = build_pack_execution_plan(request.team, context_source_ids=source_ids or None)
+    else:
+        plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None, include_downstream=mobility_relevant(request.context.customer_id))
     agents = _agents_by_id(request.team)
     policy = _team_policy(request.team)
     work_style = normalize_work_style(policy.work_style)
@@ -447,7 +451,7 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
                 completed.add(task_id)
                 del pending[task_id]
 
-                if task.action == "evaluate_mobility_relevance" and ctx.get("no_action_needed"):
+                if task.action in {"evaluate_mobility_relevance", "filter_mobility_portfolio"} and ctx.get("no_action_needed"):
                     skip_reason = (
                         "No mobility decision needed — skipped expensive Nessie/LLM work."
                     )
@@ -467,6 +471,9 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
                 r.status = RunStatus.NO_ACTION_NEEDED
                 r.financial_context = ctx["financial"]
                 r.recommendation = None
+                if request.team.policy.scope == "portfolio":
+                    from app.models import PortfolioResult
+                    r.portfolio_result = PortfolioResult(purpose="mobility", skipped_customers=ctx.get("skipped_customers", []))
                 r.metrics = type(r.metrics).model_validate(costs.metrics_dict())
                 r.evaluators = []
 
@@ -482,6 +489,22 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
                     + "; ".join(reasons)
                 ),
             )
+            return
+
+        if ctx.get("portfolio_result") is not None:
+            from app.portfolio import validate_portfolio_result
+            from app.models import EvaluatorStatus
+            result = ctx["portfolio_result"]
+            evaluators = validate_portfolio_result(result, [row["customer_id"] for row in ctx["portfolio_summaries"]])
+            def finalize_portfolio(r):
+                r.status = RunStatus.COMPLETED if all(e.status == EvaluatorStatus.PASS for e in evaluators) else RunStatus.FAILED
+                r.portfolio_result = result
+                r.metrics = type(r.metrics).model_validate(costs.metrics_dict())
+                r.evaluators = evaluators
+            update_run(run_id,finalize_portfolio)
+            for evaluator in get_run(run_id).evaluators:
+                _audit(run_id,agent_id=None,event_type="EVALUATOR_RESULT",executor_type=ExecutorType.CODE,result=evaluator.status.value,message=evaluator.details)
+            _audit(run_id,agent_id=None,event_type="RUN_COMPLETED",result=get_run(run_id).status.value,message="Portfolio workflow evaluated; no offers or financial transactions submitted.")
             return
 
         update_run(
@@ -514,7 +537,7 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
             )
             if ctx.get("review_status") == "FAIL":
                 def _finalize_fail(r) -> None:
-                    r.status = RunStatus.FAILED
+                    r.status = RunStatus.FAILED if ctx["budget_ok"] else RunStatus.BUDGET_LIMIT
                     r.financial_context = ctx["financial"]
                     r.recommendation = ctx["recommendation"]
                     r.metrics = type(r.metrics).model_validate(costs.metrics_dict())
@@ -582,11 +605,12 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
                 result=ev.status.value,
             )
     except Exception as exc:
+        final_status = RunStatus.BUDGET_LIMIT if isinstance(exc, BudgetLimitError) else RunStatus.FAILED
         logger.exception("Run %s failed: %s", run_id, exc)
         update_run(
             run_id,
             lambda r: (
-                setattr(r, "status", RunStatus.FAILED),
+                setattr(r, "status", final_status),
                 setattr(r, "metrics", type(r.metrics).model_validate(costs.metrics_dict())),
             ),
         )
@@ -595,7 +619,7 @@ async def execute_run(run_id: str, request: CreateRunRequest) -> None:
             agent_id=None,
             event_type="RUN_COMPLETED",
             message=f"Run failed: {exc}",
-            result="FAILED",
+            result=final_status.value,
         )
 
 
@@ -645,6 +669,8 @@ async def _execute_task(
             "nessie_load_customer_financials",
             "synthesize_recommendation",
             "review_recommendation",
+            "build_portfolio_financials",
+            "explain_shortlist",
         }
         validate_task_permissions(
             agent,
@@ -675,7 +701,7 @@ async def _execute_task(
             data_source = DataSource.LLM.value
             if not ok:
                 ctx["budget_ok"] = False
-                raise RuntimeError("LLM budget exceeded")
+                raise BudgetLimitError("LLM budget exceeded")
         else:
             raise RuntimeError(f"Unknown executor {task.executor}")
     except PermissionDenied as exc:
@@ -746,6 +772,10 @@ async def _run_tool(
     tool = task.action
     assert_tool_allowed(agent, tool)
 
+    if tool == "build_portfolio_financials":
+        from app.portfolio import build_portfolio_financials
+        return build_portfolio_financials(ctx,run_id,agent.id)
+
     if tool == "load_toyota_customer":
         toyota = load_toyota_customer(request.context.customer_id)
         ctx["toyota"] = toyota
@@ -805,6 +835,9 @@ async def _run_code(
     costs: RunCostTracker,
 ) -> str:
     costs.record_code()
+    if task.action in {"load_toyota_portfolio", "filter_mobility_portfolio", "rank_customers"}:
+        from app.portfolio import run_portfolio_code
+        return run_portfolio_code(task,ctx,run_id,agent.id)
     if task.action == "evaluate_mobility_relevance":
         toyota = ctx.get("toyota")
         if not toyota:
@@ -954,6 +987,10 @@ async def _run_llm(
     costs: RunCostTracker,
     request: CreateRunRequest,
 ) -> tuple[str, float, bool]:
+    if task.action == "explain_shortlist":
+        from app.portfolio import explain_portfolio
+        return await explain_portfolio(task,agent,ctx,run_id,costs,request)
+
     if task.action != "synthesize_recommendation":
         raise RuntimeError(f"Unsupported LLM action: {task.action}")
 
@@ -994,7 +1031,7 @@ async def _run_llm(
             ),
             cost_usd=0.0,
         )
-        raise RuntimeError("BUDGET_LIMIT: cannot afford LLM synthesis")
+        raise BudgetLimitError("BUDGET_LIMIT: cannot afford LLM synthesis")
 
     try:
         model_decision = choose_model(

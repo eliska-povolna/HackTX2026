@@ -35,8 +35,6 @@ def canonicalize_scopes(scopes: list[str]) -> list[str]:
 def canonicalize_agent_permissions(agent: AgentDefinition) -> AgentDefinition:
     scopes = canonicalize_scopes(list(agent.permissions.data_scopes or []))
     actions = list(agent.permissions.actions or [])
-    if agent.allowed_tools and not actions:
-        actions = ["read"]
     if scopes == list(agent.permissions.data_scopes or []) and actions == list(
         agent.permissions.actions or []
     ):
@@ -50,29 +48,17 @@ def ensure_team_runtime_config(team: TeamDefinition) -> TeamDefinition:
     """
     Return a deep-ish copy with defaults filled so planned/saved teams always
     have agent.budget and team.policy for enforcement.
-    Renames claimed scope labels and fills an empty action list with read.
+    Renames equivalent scope labels; never grants actions or raises budgets.
     Does not add tools — role grants stay in plan-time workflow alignment.
     """
     agents: list[AgentDefinition] = []
     for a in team.agents:
         a = canonicalize_agent_permissions(a)
-        budget = a.budget
-        # Clamp missing/zero budgets from imperfect planner JSON so enforcement is real.
-        max_calls = budget.max_llm_calls if budget.max_llm_calls and budget.max_llm_calls > 0 else 2
-        max_cost = (
-            budget.max_llm_cost_usd
-            if budget.max_llm_cost_usd and budget.max_llm_cost_usd > 0
-            else 0.05
-        )
-        budget = BudgetPolicy(max_llm_cost_usd=max_cost, max_llm_calls=max_calls)
+        budget = a.budget or BudgetPolicy()
         agents.append(a.model_copy(update={"budget": budget}))
 
     policy = team.policy or TeamPolicy()
     if not policy.work_style:
         policy = policy.model_copy(update={"work_style": "balanced"})
-    if policy.max_llm_calls <= 0:
-        policy = policy.model_copy(update={"max_llm_calls": 6})
-    if policy.max_llm_cost_usd <= 0:
-        policy = policy.model_copy(update={"max_llm_cost_usd": 0.20})
 
     return team.model_copy(update={"agents": agents, "policy": policy})

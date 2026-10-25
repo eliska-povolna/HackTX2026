@@ -121,7 +121,7 @@ class LLMService:
             "You are QuestMaster's team planner. Return ONLY a single JSON object "
             "(no markdown, no commentary) for a TeamDefinition with keys: "
             "id, team_name, summary, agents, optional policy "
-            "{max_llm_calls, max_llm_cost_usd, work_style, guardrails}. "
+            "{max_llm_calls, max_llm_cost_usd, work_style, guardrails, workflow_kind, scope}. "
             "Each agent MUST include: id, name, role, purpose, skills (array), "
             "allowed_tools (array), permissions object with data_scopes and actions "
             "arrays, budget object with max_llm_cost_usd (number > 0) and max_llm_calls "
@@ -139,7 +139,11 @@ class LLMService:
             "If attachments or context_sources are provided, tailor the team to use them. "
             "Prefer CODE/TOOL capabilities for deterministic work; only create AGENT "
             "(LLM) responsibilities when judgment or synthesis is required. "
-            + _toyota_capability_contract()
+            "For a portfolio mobility or vehicle-loan targeting goal, prefer TWO responsibilities: "
+            "Financial Context Analyst (load_toyota_portfolio, filter_mobility_portfolio, evaluate_mobility_relevance, build_portfolio_financials, nessie_load_customer_financials; raw/summary scopes; read/calculate; nessie grant) and "
+            "Shortlist Strategist (rank_customers, score_mobility_options for mobility, explain_shortlist; financial_summary; read/calculate/synthesize/recommend; meta grant). "
+            "Use scope=portfolio and workflow_kind=loan_opportunity or mobility_decision. Loan targeting ranks financial fit, mobility filters relevance first. "
+            "For SINGLE-CUSTOMER mobility only: " + _toyota_capability_contract()
         )
         user_payload: dict[str, Any] = {
             "goal": goal,
