@@ -12,6 +12,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import app.db as db
 from app.db import init_db
 from app.executor import build_toyota_execution_plan, execute_run
 from app.models import (
@@ -23,15 +24,20 @@ from app.models import (
     ErrorDetail,
     ErrorResponse,
     HealthResponse,
+    IntegrationStatusItem,
+    IntegrationsResponse,
     PlanTeamRequest,
     PlanTeamResponse,
     RunStatus,
     RunStatusResponse,
+    RunsListResponse,
     Template,
     TemplatesResponse,
 )
 from app.planner import plan_team as plan_team_orchestrator
-from app.run_store import create_run_record, get_run
+from app.run_store import create_run_record, get_run, list_runs
+from app.services.llm_service import get_llm_service
+from app.tools.nessie import get_nessie_client
 from app.tools.toyota import load_toyota_customers
 
 # Repo-root .env (HackTX2026/.env), not backend/.env
@@ -191,6 +197,11 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
     return CreateRunResponse(run_id=run.run_id, status=RunStatus.PLANNING)
 
 
+@app.get("/api/runs", response_model=RunsListResponse)
+async def list_run_history() -> RunsListResponse:
+    return RunsListResponse(runs=list_runs())
+
+
 @app.get("/api/runs/{run_id}", response_model=RunStatusResponse)
 async def get_run_status(run_id: str) -> RunStatusResponse:
     run = get_run(run_id)
@@ -204,3 +215,21 @@ async def get_run_status(run_id: str) -> RunStatusResponse:
             },
         )
     return run
+
+
+@app.get("/api/integrations", response_model=IntegrationsResponse)
+async def integrations_status() -> IntegrationsResponse:
+    """Non-secret connection status for Settings. Never returns credentials."""
+    llm_status = "CONNECTED" if get_llm_service().is_configured() else "FALLBACK"
+    nessie_status = "CONNECTED" if bool(get_nessie_client().api_key) else "FALLBACK"
+    tiger_status = "CONNECTED" if db.db_available else "UNAVAILABLE"
+    return IntegrationsResponse(
+        integrations=[
+            IntegrationStatusItem(id="llm", label="AI Model Provider", status=llm_status),
+            IntegrationStatusItem(
+                id="nessie", label="Capital One Nessie", status=nessie_status
+            ),
+            IntegrationStatusItem(id="vultr", label="Vultr", status="HOSTED"),
+            IntegrationStatusItem(id="tiger", label="Tiger Data", status=tiger_status),
+        ]
+    )

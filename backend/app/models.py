@@ -295,6 +295,30 @@ class CreateRunResponse(BaseModel):
     status: RunStatus
 
 
+class RunListItem(BaseModel):
+    run_id: str
+    goal: str
+    team_name: str
+    status: RunStatus
+    duration_ms: Optional[int] = None
+    estimated_ai_cost_usd: float = 0.0
+    llm_calls: int = 0
+
+
+class RunsListResponse(BaseModel):
+    runs: list[RunListItem]
+
+
+class IntegrationStatusItem(BaseModel):
+    id: str
+    label: str
+    status: str
+
+
+class IntegrationsResponse(BaseModel):
+    integrations: list[IntegrationStatusItem]
+
+
 class RunTaskState(BaseModel):
     id: str
     name: str

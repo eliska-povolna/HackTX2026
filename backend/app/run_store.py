@@ -8,13 +8,14 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
-from app.db import db_available, session_scope
+import app.db as db
 from app.db_models import AuditLogRow, OutputRow, RunRow, TaskEventRow, TeamRow
 from app.models import (
     AuditEvent,
     CreateRunRequest,
     ExecutionPlan,
     OutputItem,
+    RunListItem,
     RunMetrics,
     RunStatus,
     RunStatusResponse,
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _runs: dict[str, RunStatusResponse] = {}
+_run_team_names: dict[str, str] = {}
 
 
 def _utcnow() -> str:
@@ -70,6 +72,7 @@ def create_run_record(request: CreateRunRequest, plan: ExecutionPlan) -> RunStat
     )
     with _lock:
         _runs[run_id] = run
+        _run_team_names[run_id] = request.team.team_name
 
     _persist_create(request, run)
     return run
@@ -81,9 +84,9 @@ def get_run(run_id: str) -> Optional[RunStatusResponse]:
         if run is not None:
             return run.model_copy(deep=True)
     # try DB hydrate if memory miss
-    if db_available:
+    if db.db_available:
         try:
-            with session_scope() as session:
+            with db.session_scope() as session:
                 if session is None:
                     return None
                 row = session.get(RunRow, run_id)
@@ -94,6 +97,40 @@ def get_run(run_id: str) -> Optional[RunStatusResponse]:
         except Exception as exc:
             logger.debug("DB get_run skipped: %s", exc)
     return None
+
+
+def list_runs() -> list[RunListItem]:
+    """In-memory run summaries for Reports (newest first)."""
+    with _lock:
+        ordered = sorted(_runs.values(), key=lambda r: r.created_at, reverse=True)
+        return [
+            RunListItem(
+                run_id=run.run_id,
+                goal=run.goal,
+                team_name=_run_team_names.get(run.run_id, "Team"),
+                status=run.status,
+                duration_ms=_duration_ms(run),
+                estimated_ai_cost_usd=run.metrics.estimated_ai_cost_usd,
+                llm_calls=run.metrics.llm_calls,
+            )
+            for run in ordered
+        ]
+
+
+def _duration_ms(run: RunStatusResponse) -> Optional[int]:
+    task_ms = [t.duration_ms for t in run.tasks if t.duration_ms is not None]
+    if task_ms:
+        return int(sum(task_ms))
+    try:
+        created = datetime.strptime(run.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        updated = datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        return max(0, int((updated - created).total_seconds() * 1000))
+    except ValueError:
+        return None
 
 
 def update_run(run_id: str, mutator) -> Optional[RunStatusResponse]:
@@ -135,10 +172,10 @@ def record_task_event(
     cost_usd: float,
     success: bool,
 ) -> None:
-    if not db_available:
+    if not db.db_available:
         return
     try:
-        with session_scope() as session:
+        with db.session_scope() as session:
             if session is None:
                 return
             session.add(
@@ -159,10 +196,10 @@ def record_task_event(
 
 
 def _persist_create(request: CreateRunRequest, run: RunStatusResponse) -> None:
-    if not db_available:
+    if not db.db_available:
         return
     try:
-        with session_scope() as session:
+        with db.session_scope() as session:
             if session is None:
                 return
             session.merge(
@@ -194,10 +231,10 @@ def _persist_create(request: CreateRunRequest, run: RunStatusResponse) -> None:
 
 
 def _persist_update(run: RunStatusResponse) -> None:
-    if not db_available:
+    if not db.db_available:
         return
     try:
-        with session_scope() as session:
+        with db.session_scope() as session:
             if session is None:
                 return
             row = session.get(RunRow, run.run_id)
@@ -224,10 +261,10 @@ def _persist_update(run: RunStatusResponse) -> None:
 
 
 def _persist_audit(event: AuditEvent) -> None:
-    if not db_available:
+    if not db.db_available:
         return
     try:
-        with session_scope() as session:
+        with db.session_scope() as session:
             if session is None:
                 return
             session.add(
@@ -249,10 +286,10 @@ def _persist_audit(event: AuditEvent) -> None:
 
 
 def persist_output_for_run(run_id: str, output: OutputItem) -> None:
-    if not db_available:
+    if not db.db_available:
         return
     try:
-        with session_scope() as session:
+        with db.session_scope() as session:
             if session is None:
                 return
             session.add(
