@@ -264,6 +264,9 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             work_style=work_style,
             context_source_ids=list(request.context_source_ids or []),
         )
+        # Model-generated identifiers are not storage identities. A fresh plan
+        # must never collide with and overwrite another saved definition.
+        team = team.model_copy(deep=True, update={"id": f"generated-team-{uuid.uuid4().hex[:12]}"})
         if len(team.agents) > request.max_team_size:
             team.agents = team.agents[: request.max_team_size]
         if team.policy is None:

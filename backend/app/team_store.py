@@ -63,6 +63,7 @@ def save_team(team: TeamDefinition, *, goal: str = "") -> SavedTeamSummary:
                             )
                         )
                     else:
+                        existing.workspace_id = "toyota-demo"
                         existing.name = team.team_name
                         existing.goal = goal or team.summary or existing.goal
                         existing.agents_json = team.model_dump()
@@ -94,6 +95,7 @@ def list_saved_teams() -> list[SavedTeamSummary]:
                 if session is not None:
                     rows = (
                         session.query(TeamRow)
+                        .filter(TeamRow.workspace_id != "run-only")
                         .order_by(TeamRow.updated_at.desc())
                         .limit(100)
                         .all()
@@ -128,7 +130,7 @@ def get_saved_team(team_id: str) -> Optional[tuple[SavedTeamSummary, TeamDefinit
             with db.session_scope() as session:
                 if session is not None:
                     row = session.get(TeamRow, team_id)
-                    if row is None:
+                    if row is None or row.workspace_id == "run-only":
                         return None
                     team = _team_from_row(row)
                     if team is None:

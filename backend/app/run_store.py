@@ -563,17 +563,20 @@ def _persist_create(request: CreateRunRequest, run: RunStatusResponse) -> None:
         with db.session_scope() as session:
             if session is None:
                 return
-            session.merge(
-                TeamRow(
-                    id=request.team.id,
-                    workspace_id="toyota-demo",
-                    name=request.team.team_name,
-                    goal=request.goal,
-                    agents_json=request.team.model_dump(),
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
+            # A run must not implicitly save a draft or overwrite a user's saved
+            # definition. Keep only an internal reference when no saved team exists.
+            if session.get(TeamRow, request.team.id) is None:
+                session.add(
+                    TeamRow(
+                        id=request.team.id,
+                        workspace_id="run-only",
+                        name=request.team.team_name,
+                        goal=request.goal,
+                        agents_json=request.team.model_dump(),
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
             session.merge(
                 RunRow(
                     id=run.run_id,

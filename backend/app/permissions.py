@@ -32,6 +32,7 @@ class ActionRequirements:
 ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
     "load_toyota_customer": ActionRequirements(
         tools=("load_toyota_customer",),
+        data_scopes=("toyota_customer_profile", "vehicle_data", "lease_data", "usage_data"),
         actions=("read",),
     ),
     "nessie_load_customer_financials": ActionRequirements(
@@ -51,7 +52,7 @@ ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
     ),
     "score_mobility_options": ActionRequirements(
         tools=("score_mobility_options",),
-        data_scopes=("financial_summary",),
+        data_scopes=("financial_summary", "vehicle_data", "lease_data", "usage_data"),
         actions_any=("read", "calculate", "recommend"),
     ),
     "synthesize_recommendation": ActionRequirements(
@@ -78,6 +79,7 @@ ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
     ),
     "load_toyota_portfolio": ActionRequirements(
         tools=("load_toyota_portfolio",),
+        data_scopes=("toyota_customer_profile", "vehicle_data", "lease_data", "usage_data"),
         actions_any=("read", "calculate"),
     ),
     "filter_mobility_portfolio": ActionRequirements(
@@ -92,7 +94,7 @@ ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
     ),
     "rank_customers": ActionRequirements(
         tools=("rank_customers",),
-        data_scopes=("financial_summary",),
+        data_scopes=("financial_summary", "toyota_customer_profile", "vehicle_data", "lease_data", "usage_data"),
         actions_any=("read", "calculate", "recommend"),
     ),
     "calculate_affordability": ActionRequirements(
@@ -112,7 +114,7 @@ ACTION_REQUIREMENTS: dict[str, ActionRequirements] = {
     ),
     "explain_shortlist": ActionRequirements(
         tools=("explain_shortlist",),
-        data_scopes=("financial_summary",),
+        data_scopes=("financial_summary", "toyota_customer_profile"),
         actions_any=("synthesize", "recommend"),
         integrations=("meta",),
     ),
