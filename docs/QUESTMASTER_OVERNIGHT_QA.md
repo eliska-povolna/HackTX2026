@@ -1,5 +1,7 @@
 # QUESTMASTER OVERNIGHT QA
 
+> Initial-pass snapshot. The follow-up implementation now completes portfolio mobility and loan ranking; see [follow-up QA](QUESTMASTER_FOLLOWUP_QA.md) for the current status.
+
 **Overall: PARTIAL** — the single-customer mobility demo works, including real Nessie reads and a genuine no-action stop. Portfolio mobility and loan targeting are not end-to-end implemented. This branch makes that limitation explicit instead of executing a different responsibility.
 
 ## Branches

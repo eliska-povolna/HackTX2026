@@ -56,6 +56,7 @@ from app.models import (
     Template,
     TemplatesResponse,
 )
+from app.permissions import PermissionDenied
 from app.planner import build_fallback_team, plan_team as plan_team_orchestrator
 from app.run_store import (
     create_run_record,
@@ -414,7 +415,7 @@ async def mobility_trigger_evaluate(
 async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> CreateRunResponse:
     # Validate customer exists
     customers = load_toyota_customers()
-    if not any(c["id"] == request.context.customer_id for c in customers):
+    if not (request.team.policy and request.team.policy.scope == "portfolio") and not any(c["id"] == request.context.customer_id for c in customers):
         raise HTTPException(
             status_code=400,
             detail={
@@ -435,8 +436,13 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
 
     from app.workflow_support import require_supported_responsibility, require_supported_team
 
-    require_supported_responsibility(request.goal)
+    analysis = require_supported_responsibility(request.goal)
     require_supported_team(request.team)
+    policy = request.team.policy
+    if analysis.execution_status.value == "READY" and policy and (
+        policy.workflow_kind != analysis.workflow_kind.value or policy.scope != analysis.scope.value
+    ):
+        raise HTTPException(status_code=400, detail={"code": "NEEDS_SETUP", "message": "The responsibility changed. Assemble a team for the new workflow before running.", "recoverable": True})
 
     # Merge top-level + context attachment ids; reject unknown ids.
     att_ids = list(
@@ -469,13 +475,15 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
     from app.team_normalize import ensure_team_runtime_config
 
     request.team = ensure_team_runtime_config(request.team)
-    relevant = mobility_relevant(request.context.customer_id)
     try:
-        plan = build_toyota_execution_plan(
-            request.team,
-            context_source_ids=source_ids or None,
-            include_downstream=relevant,
-        )
+        from app.pack_workflows import build_pack_execution_plan
+        portfolio = request.team.policy and request.team.policy.scope == "portfolio"
+        if portfolio:
+            plan = build_pack_execution_plan(request.team, context_source_ids=source_ids or None)
+        else:
+            plan = build_toyota_execution_plan(request.team, context_source_ids=source_ids or None, include_downstream=mobility_relevant(request.context.customer_id))
+    except PermissionDenied as exc:
+        raise HTTPException(status_code=400, detail={"code": "PERMISSION_DENIED", "message": exc.message, "recoverable": True}) from exc
     except (ValueError, Exception) as exc:
         from app.routing import RoutingError
 
@@ -504,7 +512,7 @@ async def create_run(request: CreateRunRequest, background: BackgroundTasks) -> 
             },
         )
 
-    from app.permissions import PermissionDenied, validate_task_permissions
+    from app.permissions import validate_task_permissions
 
     try:
         for task in plan.tasks:

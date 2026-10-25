@@ -25,6 +25,7 @@ from app.models import (
     RunTaskState,
     TaskStatus,
     ToyotaRecommendation,
+    PortfolioResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,8 @@ def _summary_from_memory(run: RunStatusResponse, team_name: str) -> RunListItem:
     result = None
     if run.recommendation and run.recommendation.recommended_action:
         result = run.recommendation.recommended_action
+    elif run.portfolio_result:
+        result = f"{run.portfolio_result.purpose.upper()}_SHORTLIST"
     elif run.status == RunStatus.NO_ACTION_NEEDED:
         result = "NO_ACTION_NEEDED"
     return RunListItem(
@@ -233,6 +236,8 @@ def _list_runs_from_db() -> list[RunListItem]:
                 metrics = row.metrics_json or {}
                 rec = row.recommendation_json or {}
                 result = rec.get("recommended_action") if isinstance(rec, dict) else None
+                if isinstance(rec, dict) and rec.get("portfolio_result"):
+                    result = str(rec["portfolio_result"]["purpose"]).upper() + "_SHORTLIST"
                 created = row.created_at
                 if created is not None and created.tzinfo is None:
                     created = created.replace(tzinfo=timezone.utc)
@@ -356,6 +361,9 @@ def _hydrate_run_from_db(run_id: str) -> Optional[RunStatusResponse]:
                 except Exception:
                     pass
 
+            portfolio_result = None
+            if isinstance(row.recommendation_json, dict) and row.recommendation_json.get("portfolio_result"):
+                portfolio_result = PortfolioResult.model_validate(row.recommendation_json["portfolio_result"])
             recommendation = None
             if isinstance(row.recommendation_json, dict):
                 try:
@@ -460,6 +468,7 @@ def _hydrate_run_from_db(run_id: str) -> Optional[RunStatusResponse]:
                 metrics=metrics,
                 financial_context=financial,
                 recommendation=recommendation,
+                portfolio_result=portfolio_result,
                 outputs=outputs,
                 evaluators=[],  # evaluators are not persisted separately yet
                 audit_events=audit_events,
@@ -598,7 +607,7 @@ def _persist_update(run: RunStatusResponse) -> None:
                 run.financial_context.model_dump() if run.financial_context else None
             )
             row.recommendation_json = (
-                run.recommendation.model_dump() if run.recommendation else None
+                run.recommendation.model_dump() if run.recommendation else ({"portfolio_result":run.portfolio_result.model_dump()} if run.portfolio_result else None)
             )
             row.metrics_json = run.metrics.model_dump()
             row.updated_at = datetime.now(timezone.utc)

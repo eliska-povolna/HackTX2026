@@ -365,7 +365,7 @@ class ErrorResponse(BaseModel):
 
 
 class RunContext(BaseModel):
-    customer_id: str
+    customer_id: str = ""
     attachment_ids: list[str] = Field(default_factory=list)
     context_source_ids: list[str] = Field(default_factory=list)
 
@@ -503,6 +503,13 @@ class OutputItem(BaseModel):
     source_type: str = "CODE"
 
 
+class PortfolioResult(BaseModel):
+    purpose: str
+    candidates: list[dict] = Field(default_factory=list)
+    skipped_customers: list[dict] = Field(default_factory=list)
+    narrative: str = ""
+
+
 class RunStatusResponse(BaseModel):
     run_id: str
     status: RunStatus
@@ -514,6 +521,7 @@ class RunStatusResponse(BaseModel):
     metrics: RunMetrics
     financial_context: Optional[FinancialContext] = None
     recommendation: Optional[ToyotaRecommendation] = None
+    portfolio_result: Optional[PortfolioResult] = None
     outputs: list[OutputItem] = Field(default_factory=list)
     evaluators: list[EvaluatorResult] = Field(default_factory=list)
     audit_events: list[AuditEvent] = Field(default_factory=list)

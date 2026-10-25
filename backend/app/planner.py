@@ -6,6 +6,7 @@ import logging
 import uuid
 
 from app.model_router import normalize_work_style
+from app.permissions import PermissionDenied
 from app.models import (
     AgentDefinition,
     AgentPermissions,
@@ -34,6 +35,7 @@ AVAILABLE_TOOLS = [
     "synthesize_recommendation",
     "run_evaluators",
     "review_recommendation",
+    "load_toyota_portfolio", "filter_mobility_portfolio", "build_portfolio_financials", "rank_customers", "explain_shortlist",
 ]
 
 DEFAULT_TEAM_GUARDRAILS = [
@@ -248,14 +250,14 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
 
     from app.workflow_support import require_supported_responsibility, require_supported_team
 
-    require_supported_responsibility(goal, planning=True, answers=request.planning_answers)
+    analysis = require_supported_responsibility(goal, planning=True, answers=request.planning_answers)
 
     work_style = work_style_from_budget_preference(request.budget_preference)
     llm = get_llm_service()
     try:
         team = await llm.plan_team(
             goal=goal,
-            max_team_size=request.max_team_size,
+            max_team_size=min(request.max_team_size, 2) if analysis.scope.value == "portfolio" else request.max_team_size,
             budget_preference=request.budget_preference,
             available_tools=AVAILABLE_TOOLS,
             attachments=attachment_ctx,
@@ -272,6 +274,8 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
         elif not team.policy.work_style:
             team.policy.work_style = work_style
         team = ensure_team_runtime_config(team)
+        team.policy.workflow_kind = analysis.workflow_kind.value
+        team.policy.scope = analysis.scope.value
         require_supported_team(team)
 
         # Toyota mobility runs use a fixed workflow. Align capabilities at PLAN
@@ -282,7 +286,15 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
         )
 
         source_ids = list(request.context_source_ids or [])
-        if toyota_workflow_applies(goal, source_ids or None):
+        if analysis.scope.value == "portfolio":
+            from app.portfolio import align_portfolio_team
+            from app.pack_workflows import build_pack_execution_plan
+            team = align_portfolio_team(team, analysis.workflow_kind.value)
+            try:
+                build_pack_execution_plan(team, context_source_ids=source_ids or None)
+            except (ValueError, PermissionDenied) as exc:
+                raise HTTPException(status_code=400, detail={"code": "NEEDS_SETUP", "message": str(exc), "recoverable": True}) from exc
+        elif toyota_workflow_applies(goal, source_ids or None):
             result = validate_team_against_workflow(
                 team,
                 context_source_ids=source_ids or None,
@@ -314,6 +326,7 @@ async def plan_team(request: PlanTeamRequest) -> PlanTeamResponse:
             team=team,
             planner_source=PlannerSource.LLM,
             fallback_used=False,
+            job_analysis=analysis.model_dump(mode="json"),
         )
     except HTTPException:
         raise

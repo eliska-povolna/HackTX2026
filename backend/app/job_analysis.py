@@ -60,27 +60,13 @@ def _detect_unsupported(goal: str) -> list[str]:
     """Return missing capability labels when the goal needs packs we do not have."""
     g = _blob(goal)
     missing: list[str] = []
-    recruiting = any(
-        t in g
-        for t in (
-            "recruit",
-            "hiring",
-            "candidate",
-            "interview",
-            "ats",
-            "resume",
-            "hr team",
-        )
-    )
-    # "loan candidate" is Toyota pack — not recruiting
-    if recruiting and "loan" not in g and "vehicle" not in g and "toyota" not in g:
-        missing.extend(["ATS", "email", "calendar"])
-    if any(t in g for t in ("send email", "email them", "schedule interview")):
-        for label in ("email", "calendar"):
-            if label not in [m.lower() for m in missing]:
-                missing.append(label if label != "email" else "email")
-        if "ATS" not in missing and recruiting:
-            missing.insert(0, "ATS")
+    recruiting = any(t in g for t in ("recruit", "hiring", "interview", "ats", "resume", "hr team")) or ("candidate" in g and "loan" not in g and "vehicle" not in g)
+    if recruiting:
+        missing.append("ATS")
+    if any(t in g for t in ("send email", "email them", "email candidates", "emails them", "outreach email")):
+        missing.append("email")
+    if any(t in g for t in ("schedule interview", "schedules interview", "calendar", "schedules interviews")):
+        missing.append("calendar")
     if any(t in g for t in ("slack", "jira", "salesforce crm", "shopify")):
         missing.append("requested external SaaS connector (not installed)")
     return missing

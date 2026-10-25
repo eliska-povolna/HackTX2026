@@ -1,6 +1,6 @@
 """Fail closed when a responsibility has no end-to-end runtime implementation.
 
-Catalog entries and draft DAG builders alone are not executable capabilities.
+Only responsibilities with a connected end-to-end executor may run.
 Keep this boundary independent of planner output and context-source selection.
 """
 from fastapi import HTTPException
@@ -22,17 +22,6 @@ def require_supported_responsibility(goal: str, *, planning: bool = False, answe
             "message": " ".join(analysis.follow_up_questions),
             "recoverable": True,
         })
-    elif analysis.workflow_kind == WorkflowKind.LOAN_OPPORTUNITY:
-        message = (
-            "Loan targeting needs portfolio execution, ranking and shortlist synthesis. "
-            "These are not connected to the run engine yet. The installed runnable demo "
-            "currently supports a mobility decision for one selected Toyota customer."
-        )
-    elif analysis.scope == JobScope.PORTFOLIO:
-        message = (
-            "Portfolio execution is not connected to the run engine yet. "
-            "Ask for a mobility decision for one selected Toyota customer instead."
-        )
     if message:
         raise HTTPException(status_code=400, detail={
             "code": "NEEDS_SETUP", "message": message,
@@ -45,9 +34,7 @@ def require_supported_responsibility(goal: str, *, planning: bool = False, answe
 
 def require_supported_team(team):
     policy = team.policy
-    if policy and (policy.workflow_kind != "mobility_decision" or policy.scope != "single_customer"):
+    if policy and (policy.workflow_kind not in {"mobility_decision", "loan_opportunity"} or policy.scope not in {"single_customer", "portfolio"} or (policy.workflow_kind == "loan_opportunity" and policy.scope != "portfolio")):
         raise HTTPException(status_code=400, detail={
-            "code": "NEEDS_SETUP",
-            "message": "This team's workflow is not implemented by the live run engine. Only single-customer mobility decisions can run.",
-            "recoverable": True,
+            "code": "NEEDS_SETUP", "message": "No installed workflow matches this team configuration.", "recoverable": True,
         })

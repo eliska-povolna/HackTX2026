@@ -330,10 +330,11 @@ def rank_customers(
         relevance = row.get("relevance") or {}
         contract = toyota.get("contract") or {}
         usage = toyota.get("usage") or {}
-        score = int(financial.get("affordability_score") or _score_from_fields(financial))
+        score = int(financial["affordability_score"] if financial.get("affordability_score") is not None else _score_from_fields(financial))
         reasons: list[str] = []
 
         if purpose_l in {"loan", "loan_opportunity", "lending"}:
+            reasons.append(f"Derived affordability score {score}/100")
             if financial.get("loan_candidate_fit"):
                 score += 15
                 reasons.append("Strong loan-fit signals (stress/runway/cashflow)")
@@ -348,7 +349,12 @@ def rank_customers(
                 score += 8
                 reasons.append("High usage supports vehicle financing need")
         else:
-            # mobility priority: decision window + finance pressure
+            # Mobility urgency differs from loan affordability; never key on identity.
+            score = 20
+            stress = financial.get("financial_stress")
+            if stress in {"HIGH", "MEDIUM"}:
+                score += 20 if stress == "HIGH" else 10
+                reasons.append("Financial pressure makes the mobility decision more urgent")
             if relevance.get("relevant"):
                 score += 20
                 reasons.extend(list(relevance.get("reasons") or [])[:2])
@@ -375,7 +381,7 @@ def rank_customers(
                     "cash_reserve": financial.get("cash_reserve"),
                     "emergency_runway_months": financial.get("emergency_runway_months"),
                     "debt_burden_ratio": financial.get("debt_burden_ratio"),
-                    "affordability_score": financial.get("affordability_score") or score,
+                    "affordability_score": financial.get("affordability_score"),
                     "nessie_provenance": row.get("nessie_provenance"),
                 },
                 "vehicle": toyota.get("vehicle"),

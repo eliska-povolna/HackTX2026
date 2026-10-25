@@ -16,7 +16,7 @@ GOALS = [
     ("Identify Toyota customers who currently need a mobility decision and recommend the best next step.", "Portfolio"),
 ]
 
-@pytest.mark.parametrize("goal,reason", GOALS)
+@pytest.mark.parametrize("goal,reason", GOALS[:1])
 def test_unsupported_plan_does_not_call_llm(monkeypatch, goal, reason):
     planner = AsyncMock(side_effect=AssertionError("Unsupported work must not call LLM"))
     monkeypatch.setattr("app.planner.get_llm_service", planner)
