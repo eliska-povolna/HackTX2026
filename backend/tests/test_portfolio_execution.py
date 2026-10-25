@@ -51,6 +51,7 @@ def test_distinct_portfolio_workflows_and_relevance(client):
     assert loan["portfolio_result"]["purpose"] == "loan"
     assert len(mobility["portfolio_result"]["candidates"]) == 5
     assert len(loan["portfolio_result"]["candidates"]) == 7
+    assert loan["portfolio_result"]["candidates"][0]["name"] == "Priya Shah"
     assert {
         c["customer_id"] for c in mobility["portfolio_result"]["skipped_customers"]
     } == {"customer-no-action", "customer-mid-lease"}
@@ -252,3 +253,12 @@ def test_portfolio_evaluator_rejects_bad_scores_and_raw_fields():
     )
     checks = validate_portfolio_result(result, ["demo"])
     assert all(c.status.value == "FAIL" for c in checks)
+
+
+def test_equal_loan_scores_are_ordered_by_financial_headroom_not_input_order():
+    from app.tools.deterministic import rank_customers
+    def row(identity,budget):
+        return {"customer_id":identity,"name":identity,"financial":{"affordability_score":100,"loan_candidate_fit":True,"safe_mobility_budget":budget,"emergency_runway_months":4,"monthly_free_cashflow":2000}}
+    lower,higher=row("first-in-input",500),row("second-in-input",900)
+    assert rank_customers([lower,higher])["top_ids"][0]=="second-in-input"
+    assert rank_customers([higher,lower])["top_ids"][0]=="second-in-input"
