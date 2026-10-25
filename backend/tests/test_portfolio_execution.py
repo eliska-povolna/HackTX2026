@@ -344,3 +344,15 @@ def test_ranker_cannot_access_vehicle_data_without_scope(client):
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "PERMISSION_DENIED"
     assert "vehicle_data" in response.json()["error"]["message"]
+
+
+def test_new_plans_have_server_owned_unique_team_ids(client,monkeypatch):
+    template=build_team_for_job(analyze_job(LOAN),LOAN)
+    template.id='existing-saved-team'
+    monkeypatch.setattr('app.planner.get_llm_service',lambda:SimpleNamespace(plan_team=AsyncMock(return_value=template)))
+    first=client.post('/api/teams/plan',json={'goal':LOAN})
+    second=client.post('/api/teams/plan',json={'goal':LOAN})
+    assert first.status_code==second.status_code==200
+    assert first.json()['team']['id']!=second.json()['team']['id']
+    assert first.json()['team']['id']!='existing-saved-team'
+    assert template.id=='existing-saved-team'
